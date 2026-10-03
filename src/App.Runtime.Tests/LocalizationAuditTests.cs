@@ -177,8 +177,98 @@ internal static class LocalizationAuditTests
                     throw new InvalidOperationException($"Unlocalized cancellation: {cultureName}/{mode}");
             }
         }
+        var nativeMessages = AssertNativeMessages(assembly, get);
+        var startupCaptions = AssertStartupCaptions(assembly);
         app.Shutdown();
-        Console.WriteLine($"Localization runtime audit passed: {formats} format cases, 4 dictionary switches, 12 control workflows.");
+        Console.WriteLine($"Localization runtime audit passed: {formats} format cases, 4 dictionary switches, 12 control workflows, {nativeMessages} native messages, {startupCaptions} startup captions.");
         return 0;
+    }
+
+    // The native core only emits keys from src/Core/src/Messages.h. Every key must
+    // render in each language, keep its technical detail, and leave protocol
+    // markers or raw diagnostics untouched.
+    private static int AssertNativeMessages(Assembly assembly, MethodInfo get)
+    {
+        var localization = assembly.GetType("IPhoneMirror.App.Localization.LocalizationService")!;
+        var apply = localization.GetMethod("ApplyLanguage", BindingFlags.NonPublic | BindingFlags.Static)!;
+        var native = assembly.GetType("IPhoneMirror.App.Localization.NativeMessages")!;
+        var localize = native.GetMethod("Localize", BindingFlags.NonPublic | BindingFlags.Static)!;
+        string Localize(string text) => (string)localize.Invoke(null, [text])!;
+        var checks = 0;
+        foreach (var cultureName in new[] { "zh-CN", "zh-HK", "en-US" })
+        {
+            apply.Invoke(null, [cultureName, false, true]);
+            var dictionary = new ResourceDictionary
+            {
+                Source = new Uri($"/{assembly.GetName().Name};component/Localization/Strings.{cultureName}.xaml", UriKind.Relative),
+            };
+            var keys = dictionary.Keys.Cast<object>().OfType<string>()
+                .Where(key => key.StartsWith("Native", StringComparison.Ordinal) && key != "NativeMessageDetailFormat" && key != "NativeCoreInitFailed")
+                .ToArray();
+            if (keys.Length < 60) throw new InvalidOperationException($"Native message keys missing from {cultureName}");
+            foreach (var key in keys)
+            {
+                var expected = (string)get.Invoke(null, [key])!;
+                var plain = Localize(key);
+                var withDetail = Localize(key + ": LIBUSB_ERROR_ACCESS; retry");
+                if (expected.Contains("{0}", StringComparison.Ordinal))
+                {
+                    if (withDetail != string.Format(CultureInfo.GetCultureInfo(cultureName), expected, "LIBUSB_ERROR_ACCESS; retry"))
+                        throw new InvalidOperationException($"Native detail template not applied: {cultureName}/{key}");
+                }
+                else
+                {
+                    if (plain != expected)
+                        throw new InvalidOperationException($"Native message not localized: {cultureName}/{key}");
+                    if (!withDetail.StartsWith(expected, StringComparison.Ordinal) || !withDetail.EndsWith("LIBUSB_ERROR_ACCESS; retry", StringComparison.Ordinal))
+                        throw new InvalidOperationException($"Native detail lost: {cultureName}/{key}");
+                }
+                checks++;
+            }
+            var chained = Localize("NativeEnvPairingReady; NativeEnvLibUsbLoaded: 1.0.27; NativeEnvUsbDkUnprobed");
+            var expectedChain = string.Join(" ",
+                (string)get.Invoke(null, ["NativeEnvPairingReady"])!,
+                string.Format(CultureInfo.GetCultureInfo(cultureName), (string)get.Invoke(null, ["NativeEnvLibUsbLoaded"])!, "1.0.27"),
+                (string)get.Invoke(null, ["NativeEnvUsbDkUnprobed"])!);
+            if (chained != expectedChain)
+                throw new InvalidOperationException($"Chained native diagnostic not localized: {cultureName}");
+            foreach (var passthrough in new[] { "DRM_VIDEO_PROTECTED_AUDIO_ACTIVE", "[set_configuration] could not set config; win error: 5", "NativeUnknownKey", "" })
+                if (Localize(passthrough) != passthrough)
+                    throw new InvalidOperationException($"Unknown native text was rewritten: {cultureName}/{passthrough}");
+            checks += 4;
+        }
+        return checks;
+    }
+
+    // Startup captions come from the same dictionaries as the rest of the UI and
+    // must switch language without relying on Application.Current resources.
+    private static int AssertStartupCaptions(Assembly assembly)
+    {
+        var diagnostics = assembly.GetType("IPhoneMirror.App.Services.StartupDiagnostics")!;
+        var label = diagnostics.GetMethod("Label", BindingFlags.NonPublic | BindingFlags.Static)!;
+        var userMessage = diagnostics.GetMethod("UserMessage", BindingFlags.NonPublic | BindingFlags.Static, [typeof(Exception), typeof(string)])!;
+        var checks = 0;
+        foreach (var cultureName in new[] { "zh-CN", "zh-HK", "en-US" })
+        {
+            var dictionary = new ResourceDictionary
+            {
+                Source = new Uri($"/{assembly.GetName().Name};component/Localization/Strings.{cultureName}.xaml", UriKind.Relative),
+            };
+            foreach (var key in new[] { "StartupErrorHeading", "StartupErrorLogLabel", "StartupErrorDetails", "StartupErrorOpenLog", "StartupErrorClose" })
+            {
+                if ((string)label.Invoke(null, [key, cultureName])! != (string)dictionary[key])
+                    throw new InvalidOperationException($"Startup caption not read from dictionary: {cultureName}/{key}");
+                checks++;
+            }
+            if ((string)userMessage.Invoke(null, [new DllNotFoundException(), cultureName])! != (string)dictionary["StartupErrorNativeComponentBody"])
+                throw new InvalidOperationException($"Native component startup guidance not localized: {cultureName}");
+            if ((string)userMessage.Invoke(null, [new InvalidOperationException(), cultureName])! != (string)dictionary["StartupErrorGenericBody"])
+                throw new InvalidOperationException($"Generic startup guidance not localized: {cultureName}");
+            checks += 2;
+        }
+        // Culture aliases resolve through the shared catalog, not a second mapping.
+        if ((string)label.Invoke(null, ["StartupErrorClose", "zh-Hant-TW"])! != (string)label.Invoke(null, ["StartupErrorClose", "zh-HK"])!)
+            throw new InvalidOperationException("Traditional Chinese alias did not resolve to the Hong Kong dictionary.");
+        return checks + 1;
     }
 }
