@@ -2299,15 +2299,20 @@ Equal(false, SemanticVersion.TryParse("1.02.0", out _),
     "semantic version rejects leading zeroes");
 Equal(false, SemanticVersion.TryParse("1.2.0-beta.02", out _),
     "semantic version rejects leading zeroes in numeric prerelease identifiers");
+// This process has no resource dictionaries, so startup diagnostics must fall
+// back to the embedded English captions for every language. The translated
+// output is verified against the real dictionaries by the runtime tests.
 Equal(true, StartupDiagnostics.UserMessage(new DllNotFoundException(), true)
-    .Contains("原生组件", StringComparison.Ordinal),
-    "startup diagnostics explain native dependency load failures");
+    .Contains("native component", StringComparison.OrdinalIgnoreCase),
+    "startup diagnostics explain native dependency load failures without dictionaries");
 Equal(true, StartupDiagnostics.UserMessage(new FileNotFoundException(), false)
     .Contains("native component", StringComparison.OrdinalIgnoreCase),
     "startup preflight missing-file failures use native dependency guidance");
-Equal(true, StartupDiagnostics.UserMessage(new DllNotFoundException(), "zh-HK")
-    .Contains("原生元件", StringComparison.Ordinal),
-    "Hong Kong startup diagnostics use localized native dependency guidance");
+Equal(true, StartupDiagnostics.UserMessage(new InvalidOperationException(), "zh-HK")
+    .Contains("during startup", StringComparison.OrdinalIgnoreCase),
+    "other startup failures use the generic guidance");
+Equal("Close", StartupDiagnostics.Label("StartupErrorClose", "zh-CN"),
+    "startup captions fall back to English when the dictionary is unavailable");
 Equal(LanguageCatalog.TraditionalChineseHongKong, LanguageCatalog.ResolveCultureName("zh-Hant-TW"),
     "Traditional Chinese variants share the Hong Kong dictionary");
 Equal(LanguageCatalog.SimplifiedChinese, LanguageCatalog.ResolveCultureName("zh-SG"),

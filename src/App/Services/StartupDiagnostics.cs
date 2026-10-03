@@ -1,8 +1,11 @@
+using System.Collections.Concurrent;
 using System.IO;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Windows;
+using IPhoneMirror.Shared.Localization;
 
 namespace IPhoneMirror.App.Services;
 
@@ -106,51 +109,66 @@ internal static class StartupDiagnostics
     }
 
     internal static string UserMessage(Exception error, bool simplifiedChinese) =>
-        UserMessage(error, simplifiedChinese ? "zh-CN" : "en-US");
+        UserMessage(error, simplifiedChinese
+            ? LanguageCatalog.SimplifiedChinese : LanguageCatalog.English);
 
     internal static string UserMessage(Exception error, string language)
     {
-        var hongKong = language.Equals("zh-HK", StringComparison.OrdinalIgnoreCase) ||
-            language.Equals("zh-Hant-HK", StringComparison.OrdinalIgnoreCase) ||
-            language.Equals("zh-MO", StringComparison.OrdinalIgnoreCase);
-        var simplifiedChinese = language.Equals("zh-CN",
-            StringComparison.OrdinalIgnoreCase);
         var nativeLoadFailure = Find(error, static candidate =>
             candidate is DllNotFoundException or BadImageFormatException or
                 FileNotFoundException);
-        if (nativeLoadFailure)
-        {
-            if (hongKong)
-                return "無法載入應用程式所需的原生元件。請重新安裝最新的完整安裝程式；詳細診斷資料已寫入下方記錄。";
-            return simplifiedChinese
-                ? "无法加载程序所需的原生组件。请重新安装最新的完整安装包；详细诊断已写入下方日志。"
-                : "A required native component could not be loaded. Reinstall the latest full Setup package; detailed diagnostics were written to the log below.";
-        }
-        if (hongKong)
-            return "iPhoneMirror 啟動時發生錯誤。詳細診斷資料已寫入下方記錄。";
-        return simplifiedChinese
-            ? "iPhoneMirror 启动时遇到错误。详细诊断已写入下方日志。"
-            : "iPhoneMirror encountered an error during startup. Detailed diagnostics were written to the log below.";
+        return Label(nativeLoadFailure
+            ? "StartupErrorNativeComponentBody" : "StartupErrorGenericBody", language);
     }
 
+    /// <summary>
+    /// Returns a startup-error caption in the requested language. The startup
+    /// window also reports dictionary-load failures, so this never depends on
+    /// <c>Application.Current</c> resources: it loads the culture's own
+    /// dictionary directly and only falls back to the English text embedded
+    /// here when that dictionary cannot be read.
+    /// </summary>
     internal static string Label(string key, string language)
     {
-        var labels = key switch
+        if (!FallbackText.TryGetValue(key, out var fallback))
+            throw new ArgumentOutOfRangeException(nameof(key));
+        var culture = LanguageCatalog.ResolveCultureName(language);
+        try
         {
-            "StartupErrorHeading" => ("iPhoneMirror 无法启动", "iPhoneMirror 無法啟動", "iPhoneMirror could not start"),
-            "StartupErrorLogLabel" => ("诊断日志", "診斷記錄", "Diagnostic log"),
-            "StartupErrorDetails" => ("错误详情", "錯誤詳細資料", "Error details"),
-            "StartupErrorOpenLog" => ("打开日志位置", "開啟記錄位置", "Open log location"),
-            "StartupErrorClose" => ("关闭", "關閉", "Close"),
-            _ => throw new ArgumentOutOfRangeException(nameof(key)),
-        };
-        return Localization.LocalizationService.ResolveCultureName(language) switch
+            var dictionary = Dictionaries.GetOrAdd(culture, LoadDictionary);
+            if (dictionary[key] is string text && text.Length != 0) return text;
+        }
+        catch (Exception error)
         {
-            "zh-CN" => labels.Item1,
-            "zh-HK" => labels.Item2,
-            _ => labels.Item3,
-        };
+            DiagnosticLogger.ExceptionOnce($"startup-dictionary-{culture}", "startup",
+                "dictionary_load_failed", error, ("culture", culture));
+        }
+        return fallback;
     }
+
+    private static readonly ConcurrentDictionary<string, ResourceDictionary> Dictionaries =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private static ResourceDictionary LoadDictionary(string culture) => new()
+    {
+        Source = LanguageCatalog.DictionaryUri(
+            typeof(StartupDiagnostics).Assembly.GetName().Name!, culture),
+    };
+
+    // Last-resort English captions for when no dictionary can be loaded at all.
+    // scripts/audit_localization.py checks that each entry exists in every
+    // dictionary and matches the en-US text, so these never drift.
+    private static readonly IReadOnlyDictionary<string, string> FallbackText =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["StartupErrorHeading"] = "iPhoneMirror could not start",
+            ["StartupErrorNativeComponentBody"] = "A required native component could not be loaded. Reinstall the latest full Setup package; detailed diagnostics were written to the log below.",
+            ["StartupErrorGenericBody"] = "iPhoneMirror encountered an error during startup. Detailed diagnostics were written to the log below.",
+            ["StartupErrorLogLabel"] = "Diagnostic log",
+            ["StartupErrorDetails"] = "Error details",
+            ["StartupErrorOpenLog"] = "Open log location",
+            ["StartupErrorClose"] = "Close",
+        };
 
     private static bool Find(Exception error, Func<Exception, bool> predicate)
     {

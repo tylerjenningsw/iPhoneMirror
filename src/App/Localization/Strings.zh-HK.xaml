@@ -153,6 +153,8 @@
     <system:String x:Key="StartupErrorDetails">錯誤詳細資料</system:String>
     <system:String x:Key="StartupErrorOpenLog">開啟記錄位置</system:String>
     <system:String x:Key="StartupErrorClose">關閉</system:String>
+    <system:String x:Key="StartupErrorNativeComponentBody">無法載入應用程式所需的原生元件。請重新安裝最新的完整安裝程式；詳細診斷資料已寫入下方記錄。</system:String>
+    <system:String x:Key="StartupErrorGenericBody">iPhoneMirror 啟動時發生錯誤。詳細診斷資料已寫入下方記錄。</system:String>
     <system:String x:Key="NativeMessageDetailFormat">{0}：{1}</system:String>
     <system:String x:Key="NativeUnknownError">未知錯誤</system:String>
     <system:String x:Key="NativeCoreNotInitialized">核心尚未初始化</system:String>

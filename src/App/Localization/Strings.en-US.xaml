@@ -153,6 +153,8 @@
     <system:String x:Key="StartupErrorDetails">Error details</system:String>
     <system:String x:Key="StartupErrorOpenLog">Open log location</system:String>
     <system:String x:Key="StartupErrorClose">Close</system:String>
+    <system:String x:Key="StartupErrorNativeComponentBody">A required native component could not be loaded. Reinstall the latest full Setup package; detailed diagnostics were written to the log below.</system:String>
+    <system:String x:Key="StartupErrorGenericBody">iPhoneMirror encountered an error during startup. Detailed diagnostics were written to the log below.</system:String>
     <system:String x:Key="NativeMessageDetailFormat">{0}: {1}</system:String>
     <system:String x:Key="NativeUnknownError">Unknown error</system:String>
     <system:String x:Key="NativeCoreNotInitialized">The core is not initialized.</system:String>
