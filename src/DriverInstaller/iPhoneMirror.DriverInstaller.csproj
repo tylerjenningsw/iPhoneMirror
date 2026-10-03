@@ -31,6 +31,10 @@
 
   <ItemGroup>
     <PackageReference Include="WPF-UI" Version="4.3.0" />
+    <Compile Include="..\Shared\Localization\LanguageCatalog.cs"
+             Link="Localization\LanguageCatalog.cs" />
+    <Compile Include="..\Shared\Localization\LanguagePreference.cs"
+             Link="Localization\LanguagePreference.cs" />
     <Compile Include="..\Shared\Networking\SegmentedHttpDownloader.cs"
              Link="Networking\SegmentedHttpDownloader.cs" />
     <Compile Include="..\Shared\Security\ElevationPathLock.cs"

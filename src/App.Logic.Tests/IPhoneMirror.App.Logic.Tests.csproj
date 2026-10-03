@@ -18,6 +18,10 @@
     <Compile Include="Program.cs" />
     <Compile Include="IssueFixMediaTests.cs" />
     <Compile Include="DotnetTestSmoke.cs" />
+    <Compile Include="..\Shared\Localization\LanguageCatalog.cs"
+             Link="Localization\LanguageCatalog.cs" />
+    <Compile Include="..\Shared\Localization\LanguagePreference.cs"
+             Link="Localization\LanguagePreference.cs" />
     <Compile Include="..\Shared\Networking\SegmentedHttpDownloader.cs" Link="Networking\SegmentedHttpDownloader.cs" />
     <Compile Include="..\App\Services\StableDeviceSelection.cs" Link="StableDeviceSelection.cs" />
     <Compile Include="..\App\Services\UsbDeviceRefreshPolicy.cs" Link="UsbDeviceRefreshPolicy.cs" />

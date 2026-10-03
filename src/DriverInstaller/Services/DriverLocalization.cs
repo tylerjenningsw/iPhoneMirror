@@ -1,25 +1,28 @@
 using System.Globalization;
-using System.Text.Json;
 using System.Windows;
+using IPhoneMirror.Shared.Localization;
 
 namespace IPhoneMirror.DriverInstaller.Services;
 
+/// <summary>
+/// Resource lookup for the driver manager. Language selection and culture
+/// mapping come from the shared <see cref="LanguageCatalog"/>; the stored user
+/// preference comes from <see cref="LanguagePreference"/>, so this process can
+/// never disagree with the main app about which dictionary to load.
+/// </summary>
 internal static class DriverLocalization
 {
-    internal const string Chinese = "zh-CN";
-    internal const string TraditionalChineseHongKong = "zh-HK";
-    internal const string English = "en-US";
-    private static readonly string SettingsPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "iPhoneMirror", "settings.json");
+    internal const string Chinese = LanguageCatalog.SimplifiedChinese;
+    internal const string TraditionalChineseHongKong = LanguageCatalog.TraditionalChineseHongKong;
+    internal const string English = LanguageCatalog.English;
 
-    internal static string Language { get; private set; } = English;
-    internal static CultureInfo Culture { get; private set; } = CultureInfo.GetCultureInfo(English);
+    internal static string Language { get; private set; } = LanguageCatalog.Fallback;
+    internal static CultureInfo Culture { get; private set; } = CultureInfo.GetCultureInfo(LanguageCatalog.Fallback);
 
     internal static void Initialize(IReadOnlyList<string> arguments)
     {
-        var requested = ReadArgument(arguments) ?? LoadConfiguredLanguage();
-        Language = ResolveLanguage(requested);
+        var requested = ReadArgument(arguments) ?? LanguagePreference.Read();
+        Language = LanguageCatalog.ResolvePreference(requested);
         Culture = CultureInfo.GetCultureInfo(Language);
         CultureInfo.CurrentCulture = Culture;
         CultureInfo.CurrentUICulture = Culture;
@@ -38,7 +41,7 @@ internal static class DriverLocalization
 
     internal static ResourceDictionary CreateDictionary() => new()
     {
-        Source = new Uri($"Localization/Strings.{Language}.xaml", UriKind.Relative),
+        Source = new Uri($"{LanguageCatalog.DictionaryPrefix}{Language}.xaml", UriKind.Relative),
     };
 
 
@@ -80,46 +83,6 @@ internal static class DriverLocalization
         return null;
     }
 
-    private static string LoadConfiguredLanguage()
-    {
-        try
-        {
-            if (!File.Exists(SettingsPath)) return ResolveSystemLanguage();
-            var settings = JsonSerializer.Deserialize<UserSettings>(File.ReadAllText(SettingsPath));
-            return ResolveLanguage(settings?.Language);
-        }
-        catch { return ResolveSystemLanguage(); }
-    }
-
-    private static string ResolveLanguage(string? value)
-    {
-        if (string.Equals(value, Chinese, StringComparison.OrdinalIgnoreCase))
-            return Chinese;
-        if (value is not null && IsTraditionalChinese(value))
-            return TraditionalChineseHongKong;
-        return string.Equals(value, English, StringComparison.OrdinalIgnoreCase)
-            ? English
-            : ResolveSystemLanguage();
-    }
-
-    private static string ResolveSystemLanguage() =>
-        ResolveCultureName(CultureInfo.InstalledUICulture.Name);
-
-    internal static string ResolveCultureName(string cultureName)
-    {
-        if (IsTraditionalChinese(cultureName))
-            return TraditionalChineseHongKong;
-        return cultureName.StartsWith("zh", StringComparison.OrdinalIgnoreCase)
-            ? Chinese : English;
-    }
-
-    private static bool IsTraditionalChinese(string cultureName) =>
-        cultureName.StartsWith("zh-Hant", StringComparison.OrdinalIgnoreCase) ||
-        cultureName.Equals("zh-CHT", StringComparison.OrdinalIgnoreCase) ||
-        cultureName.Equals(TraditionalChineseHongKong,
-            StringComparison.OrdinalIgnoreCase) ||
-        cultureName.Equals("zh-MO", StringComparison.OrdinalIgnoreCase) ||
-        cultureName.Equals("zh-TW", StringComparison.OrdinalIgnoreCase);
-
-    private sealed record UserSettings(string Language);
+    internal static string ResolveCultureName(string cultureName) =>
+        LanguageCatalog.ResolveCultureName(cultureName);
 }
