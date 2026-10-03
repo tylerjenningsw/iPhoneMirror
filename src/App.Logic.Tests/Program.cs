@@ -2333,6 +2333,17 @@ Equal(true, NativeMessages.TryParse("NativeUsbOpenFailed: LIBUSB_ERROR_ACCESS; r
     "native message keys keep their complete technical detail");
 Equal(false, NativeMessages.TryParse("DRM_VIDEO_PROTECTED", out _, out _),
     "protocol markers are not native message keys");
+Equal(true, NativeMessages.TryParseChain("NativeEnvLibUsbLoaded: 1.0.27; NativeEnvUsbDkUnprobed", out var detailFirstChain) &&
+    detailFirstChain.Count == 2 && detailFirstChain[0] == ("NativeEnvLibUsbLoaded", "1.0.27") &&
+    detailFirstChain[1] == ("NativeEnvUsbDkUnprobed", null),
+    "a chain whose first message carries a detail still splits at the next key");
+Equal(true, NativeMessages.TryParseChain("NativeUsbOpenFailed: LIBUSB_ERROR_ACCESS; retry later", out var detailChain) &&
+    detailChain.Count == 1 && detailChain[0] == ("NativeUsbOpenFailed", "LIBUSB_ERROR_ACCESS; retry later"),
+    "non-keyed segments stay inside the preceding detail");
+Equal(false, NativeMessages.TryParseChain("libusb; NativeEnvUsbDkUnprobed", out _),
+    "text that does not start with a key is not a chain");
+Equal(false, NativeMessages.TryParseChain("NativeEnvUsbDkUnprobed; retry later", out _),
+    "a detail-free message cannot be followed by non-keyed text");
 var preferenceFile = Path.Combine(Path.GetTempPath(), $"iPhoneMirror-language-{Guid.NewGuid():N}.json");
 try
 {

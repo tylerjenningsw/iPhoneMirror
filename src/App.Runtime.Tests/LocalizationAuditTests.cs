@@ -232,6 +232,13 @@ internal static class LocalizationAuditTests
                 (string)get.Invoke(null, ["NativeEnvUsbDkUnprobed"])!);
             if (chained != expectedChain)
                 throw new InvalidOperationException($"Chained native diagnostic not localized: {cultureName}");
+            var detailFirst = Localize("NativeEnvLibUsbLoaded: 1.0.27; NativeEnvUsbDkUnprobed");
+            var expectedDetailFirst = string.Join(" ",
+                string.Format(CultureInfo.GetCultureInfo(cultureName), (string)get.Invoke(null, ["NativeEnvLibUsbLoaded"])!, "1.0.27"),
+                (string)get.Invoke(null, ["NativeEnvUsbDkUnprobed"])!);
+            if (detailFirst != expectedDetailFirst)
+                throw new InvalidOperationException($"Detail-first native chain not localized: {cultureName}");
+            checks++;
             foreach (var passthrough in new[] { "DRM_VIDEO_PROTECTED_AUDIO_ACTIVE", "[set_configuration] could not set config; win error: 5", "NativeUnknownKey", "" })
                 if (Localize(passthrough) != passthrough)
                     throw new InvalidOperationException($"Unknown native text was rewritten: {cultureName}/{passthrough}");

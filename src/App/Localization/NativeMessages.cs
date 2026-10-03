@@ -35,18 +35,42 @@ internal static partial class NativeMessages
     internal static string Localize(string? text)
     {
         if (string.IsNullOrEmpty(text)) return text ?? string.Empty;
-        if (TryLocalizeSingle(text, out var single)) return single;
-
-        // A multi-segment diagnostic only counts when every segment is a known
-        // key; otherwise a raw detail containing "; " would be torn apart.
-        if (!text.Contains(SegmentSeparator, StringComparison.Ordinal)) return text;
-        var segments = text.Split(SegmentSeparator, StringSplitOptions.None);
-        var localized = new string[segments.Length];
-        for (var index = 0; index < segments.Length; ++index)
+        if (!TryParseChain(text, out var messages)) return text;
+        var localized = new string[messages.Count];
+        for (var index = 0; index < messages.Count; ++index)
         {
-            if (!TryLocalizeSingle(segments[index], out localized[index])) return text;
+            if (!TryLocalizeSingle(messages[index].Key, messages[index].Detail, out localized[index]))
+                return text;
         }
-        return LocalizationService.Join(SegmentJoin, localized);
+        return localized.Length == 1 ? localized[0] : LocalizationService.Join(SegmentJoin, localized);
+    }
+
+    /// <summary>
+    /// Splits a native message chain into keyed messages. Every <c>"; "</c>
+    /// segment that starts with a key begins a new message; any other segment
+    /// is part of the preceding message's detail, so a raw diagnostic such as
+    /// <c>LIBUSB_ERROR_ACCESS; retry later</c> is never torn apart. Returns false
+    /// when the text does not start with a key or a detail-free message is
+    /// followed by non-keyed text.
+    /// </summary>
+    internal static bool TryParseChain(string? text,
+        out IReadOnlyList<(string Key, string? Detail)> messages)
+    {
+        var parsed = new List<(string Key, string? Detail)>();
+        messages = parsed;
+        if (string.IsNullOrEmpty(text)) return false;
+        foreach (var segment in text.Split(SegmentSeparator, StringSplitOptions.None))
+        {
+            if (TryParse(segment, out var key, out var detail))
+            {
+                parsed.Add((key, detail));
+                continue;
+            }
+            if (parsed.Count == 0 || parsed[^1].Detail is null) return false;
+            var (previousKey, previousDetail) = parsed[^1];
+            parsed[^1] = (previousKey, previousDetail + SegmentSeparator + segment);
+        }
+        return true;
     }
 
     /// <summary>
@@ -65,10 +89,9 @@ internal static partial class NativeMessages
         return true;
     }
 
-    private static bool TryLocalizeSingle(string text, out string localized)
+    private static bool TryLocalizeSingle(string key, string? detail, out string localized)
     {
-        localized = text;
-        if (!TryParse(text, out var key, out var detail)) return false;
+        localized = key;
         var template = LocalizationService.Get(key);
         // Get returns the key itself when no dictionary defines it.
         if (template == key) return false;
