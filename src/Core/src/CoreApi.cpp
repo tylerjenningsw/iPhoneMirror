@@ -6,6 +6,7 @@
 #include "Capture/WirelessCaptureSession.h"
 #include "Capture/WirelessReceiverHub.h"
 #include "Logging.h"
+#include "Messages.h"
 #include "Renderer/D3D11PreviewRenderer.h"
 #include "Transport/LibUsb0Readiness.h"
 #include "Transport/Socket.h"
@@ -27,6 +28,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <Windows.h>
+
+namespace msg = iPhoneMirror::messages;
 
 namespace {
 
@@ -133,7 +136,7 @@ std::wstring product_type_for_udid(const wchar_t* udid) {
 std::wstring widen(std::string_view text) {
     if (text.empty()) return {};
     const int length = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
-    if (length <= 0) return L"未知错误";
+    if (length <= 0) return msg::text(msg::key::UnknownError);
     std::wstring result(static_cast<std::size_t>(length), L'\0');
     MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), result.data(), length);
     return result;
@@ -465,10 +468,10 @@ iPhoneMirror::capture::CapturePreferences preferences_from_options(
 std::int32_t start_capture_locked(const wchar_t* udid,
     const iPhoneMirror::capture::CapturePreferences& preferences) {
     if (!udid || !*udid) {
-        return fail(iPhoneMirror::Result::InvalidArgument, L"必须选择 iPhone");
+        return fail(iPhoneMirror::Result::InvalidArgument, msg::text(msg::key::DeviceRequired));
     }
     if (!initialized) {
-        return fail(iPhoneMirror::Result::NotInitialized, L"核心尚未初始化");
+        return fail(iPhoneMirror::Result::NotInitialized, msg::text(msg::key::CoreNotInitialized));
     }
     try {
         const auto serial = narrow(udid);
@@ -501,7 +504,7 @@ std::int32_t start_capture_locked(const wchar_t* udid,
     } catch (const std::exception& error) {
         capture_session.reset();
         return fail(iPhoneMirror::Result::TransportUnavailable,
-            L"USB 后端无法打开所选 iPhone：" + widen(error.what()));
+            msg::text(msg::key::UsbOpenFailed, widen(error.what())));
     }
 }
 
@@ -525,10 +528,10 @@ std::int32_t IM_CALL im_initialize() {
         return static_cast<std::int32_t>(iPhoneMirror::Result::Ok);
     } catch (const std::exception&) {
         shutdown_logging_noexcept();
-        return fail(iPhoneMirror::Result::InternalError, L"初始化 Winsock 失败");
+        return fail(iPhoneMirror::Result::InternalError, msg::text(msg::key::WinsockInitFailed));
     } catch (...) {
         shutdown_logging_noexcept();
-        return fail(iPhoneMirror::Result::InternalError, L"初始化核心时发生未知错误");
+        return fail(iPhoneMirror::Result::InternalError, msg::text(msg::key::CoreInitUnknownError));
     }
 }
 
@@ -633,18 +636,18 @@ std::int32_t IM_CALL im_refresh_devices(iPhoneMirror::DeviceInfo* devices,
 
 std::int32_t IM_CALL im_refresh_devices_ex(iPhoneMirror::DeviceInfo* devices,
     std::uint32_t* count, std::int32_t refresh_metadata) {
-    if (!count) return fail(iPhoneMirror::Result::InvalidArgument, L"count 不能为空");
+    if (!count) return fail(iPhoneMirror::Result::InvalidArgument, msg::text(msg::key::CountRequired));
     std::shared_lock initialization_lock(initialization_mutex);
     {
         // DeviceManager serializes cached metadata internally. Holding
         // state_mutex across usbmux/Lockdown round trips would stall the D3D
         // frame provider and make a manual refresh look like a frozen preview.
         std::scoped_lock lock(state_mutex);
-        if (!initialized) return fail(iPhoneMirror::Result::NotInitialized, L"核心尚未初始化");
+        if (!initialized) return fail(iPhoneMirror::Result::NotInitialized, msg::text(msg::key::CoreNotInitialized));
     }
     if (!iPhoneMirror::capture::try_begin_usb_device_discovery()) {
         return fail(iPhoneMirror::Result::UsbConfigurationNotReady,
-            L"Apple USB 配置正在切换；本次设备刷新已跳过");
+            msg::text(msg::key::UsbConfigurationSwitching));
     }
     struct DiscoveryGuard final {
         ~DiscoveryGuard() { iPhoneMirror::capture::end_usb_device_discovery(); }
@@ -683,7 +686,7 @@ std::int32_t IM_CALL im_refresh_devices_ex(iPhoneMirror::DeviceInfo* devices,
         }
         const auto capacity = *count;
         *count = required;
-        if (capacity < required) return fail(iPhoneMirror::Result::BufferTooSmall, L"设备列表缓冲区不足");
+        if (capacity < required) return fail(iPhoneMirror::Result::BufferTooSmall, msg::text(msg::key::DeviceListBufferTooSmall));
         for (std::size_t index = 0; index < records.size(); ++index) fill_device(devices[index], records[index]);
         device_refresh_snapshot.clear();
         device_refresh_snapshot_valid = false;
@@ -692,7 +695,7 @@ std::int32_t IM_CALL im_refresh_devices_ex(iPhoneMirror::DeviceInfo* devices,
     } catch (...) {
         device_refresh_snapshot.clear();
         device_refresh_snapshot_valid = false;
-        return fail(iPhoneMirror::Result::InternalError, L"刷新 Apple 设备时发生异常");
+        return fail(iPhoneMirror::Result::InternalError, msg::text(msg::key::DeviceRefreshFailed));
     }
 }
 
@@ -912,10 +915,10 @@ std::int32_t IM_CALL im_media_cast_request_stop() {
 
 std::int32_t IM_CALL im_get_environment(iPhoneMirror::EnvironmentInfo* environment) {
     if (!environment || environment->struct_size != sizeof(iPhoneMirror::EnvironmentInfo)) {
-        return fail(iPhoneMirror::Result::InvalidArgument, L"EnvironmentInfo 结构版本不匹配");
+        return fail(iPhoneMirror::Result::InvalidArgument, msg::text(msg::key::EnvironmentInfoVersionMismatch));
     }
     std::scoped_lock lock(state_mutex);
-    if (!initialized) return fail(iPhoneMirror::Result::NotInitialized, L"核心尚未初始化");
+    if (!initialized) return fail(iPhoneMirror::Result::NotInitialized, msg::text(msg::key::CoreNotInitialized));
     try {
         const auto info = device_manager.environment();
         environment->api_version = iPhoneMirror::ApiVersion;
@@ -935,7 +938,7 @@ std::int32_t IM_CALL im_get_environment(iPhoneMirror::EnvironmentInfo* environme
         last_error.clear();
         return static_cast<std::int32_t>(iPhoneMirror::Result::Ok);
     } catch (...) {
-        return fail(iPhoneMirror::Result::InternalError, L"读取驱动环境时发生异常");
+        return fail(iPhoneMirror::Result::InternalError, msg::text(msg::key::EnvironmentReadFailed));
     }
 }
 
@@ -993,7 +996,7 @@ std::int32_t IM_CALL im_start_capture_with_options(const wchar_t* udid,
         !std::isfinite(options->audio_volume) || options->audio_volume < 0.0F ||
         options->audio_volume > 1.0F || !valid_capture_option_extensions(*options)) {
         return fail(iPhoneMirror::Result::InvalidArgument,
-            L"CaptureOptions 参数无效");
+            msg::text(msg::key::CaptureOptionsInvalid));
     }
     auto preferences = preferences_from_options(*options);
     std::scoped_lock lock(state_mutex);
@@ -1011,7 +1014,7 @@ std::int32_t IM_CALL im_stop_capture() {
             snapshot.failure_stage ==
                 iPhoneMirror::capture::FailureStage::SessionTeardown)
             return fail(iPhoneMirror::Result::SessionTeardownFailed,
-                snapshot.message.empty() ? L"投屏停止时 USB 资源恢复失败" : snapshot.message);
+                snapshot.message.empty() ? msg::text(msg::key::UsbRestoreFailed) : snapshot.message);
         if (snapshot.state == iPhoneMirror::capture::State::Stopped &&
             snapshot.failure_stage ==
                 iPhoneMirror::capture::FailureStage::SessionTeardown &&
@@ -1030,7 +1033,7 @@ std::int32_t IM_CALL im_stop_capture() {
 
 std::int32_t IM_CALL im_get_capture_status(iPhoneMirror::CaptureStatus* status) {
     if (!status || status->struct_size != sizeof(iPhoneMirror::CaptureStatus)) {
-        return fail(iPhoneMirror::Result::InvalidArgument, L"CaptureStatus 结构版本不匹配");
+        return fail(iPhoneMirror::Result::InvalidArgument, msg::text(msg::key::CaptureStatusVersionMismatch));
     }
     std::scoped_lock lock(state_mutex);
     status->api_version = iPhoneMirror::ApiVersion;
@@ -1043,7 +1046,7 @@ std::int32_t IM_CALL im_get_capture_status(iPhoneMirror::CaptureStatus* status) 
         status->failure_kind = iPhoneMirror::CaptureFailureKind::None;
         status->failure_stage = iPhoneMirror::CaptureFailureStage::None;
         status->error_code = 0;
-        copy_text(status->message, L"等待设备");
+        copy_text(status->message, msg::text(msg::key::WaitingForDevice));
         return static_cast<std::int32_t>(iPhoneMirror::Result::Ok);
     }
     const auto snapshot = capture_session->snapshot();
@@ -1066,9 +1069,9 @@ std::int32_t IM_CALL im_get_capture_status(iPhoneMirror::CaptureStatus* status) 
 }
 
 std::int32_t IM_CALL im_get_latest_video_timestamp(std::int64_t* timestamp_100ns) {
-    if (!timestamp_100ns) return fail(iPhoneMirror::Result::InvalidArgument, L"视频时间戳指针无效");
+    if (!timestamp_100ns) return fail(iPhoneMirror::Result::InvalidArgument, msg::text(msg::key::VideoTimestampPointerInvalid));
     std::scoped_lock lock(state_mutex);
-    if (!initialized) return fail(iPhoneMirror::Result::NotInitialized, L"核心尚未初始化");
+    if (!initialized) return fail(iPhoneMirror::Result::NotInitialized, msg::text(msg::key::CoreNotInitialized));
     if (!capture_session) {
         *timestamp_100ns = 0;
         return static_cast<std::int32_t>(iPhoneMirror::Result::Ok);
@@ -1081,19 +1084,19 @@ std::int32_t IM_CALL im_get_latest_video_timestamp(std::int64_t* timestamp_100ns
 std::int32_t IM_CALL im_copy_latest_video_frame(iPhoneMirror::VideoFrameInfo* info,
     std::uint8_t* buffer, std::uint32_t* buffer_size) {
     if (!info || info->struct_size != sizeof(iPhoneMirror::VideoFrameInfo) || !buffer_size) {
-        return fail(iPhoneMirror::Result::InvalidArgument, L"VideoFrameInfo 结构版本不匹配");
+        return fail(iPhoneMirror::Result::InvalidArgument, msg::text(msg::key::VideoFrameInfoVersionMismatch));
     }
     std::shared_ptr<const iPhoneMirror::media::DecodedFrame> frame;
     {
         std::scoped_lock lock(state_mutex);
-        if (!initialized) return fail(iPhoneMirror::Result::NotInitialized, L"核心尚未初始化");
-        if (!capture_session) return fail(iPhoneMirror::Result::CaptureBackendUnavailable, L"当前没有投屏会话");
+        if (!initialized) return fail(iPhoneMirror::Result::NotInitialized, msg::text(msg::key::CoreNotInitialized));
+        if (!capture_session) return fail(iPhoneMirror::Result::CaptureBackendUnavailable, msg::text(msg::key::NoCaptureSession));
         frame = capture_session->latest_frame();
     }
-    if (!frame) return fail(iPhoneMirror::Result::CaptureBackendUnavailable, L"正在等待首个解码视频帧");
+    if (!frame) return fail(iPhoneMirror::Result::CaptureBackendUnavailable, msg::text(msg::key::WaitingForFirstFrame));
     const auto required_64 = static_cast<std::uint64_t>(frame->width) * frame->height * 4U;
     if (required_64 > std::numeric_limits<std::uint32_t>::max()) {
-        return fail(iPhoneMirror::Result::InternalError, L"视频帧尺寸过大");
+        return fail(iPhoneMirror::Result::InternalError, msg::text(msg::key::VideoFrameTooLarge));
     }
     const auto required = static_cast<std::uint32_t>(required_64);
     info->api_version = iPhoneMirror::ApiVersion;
@@ -1106,7 +1109,7 @@ std::int32_t IM_CALL im_copy_latest_video_frame(iPhoneMirror::VideoFrameInfo* in
     *buffer_size = required;
     if (!buffer || capacity < required) return static_cast<std::int32_t>(iPhoneMirror::Result::BufferTooSmall);
     if (!nv12_to_bgra(*frame, buffer))
-        return fail(iPhoneMirror::Result::ProtocolError, L"NV12/P010 视频帧布局无效");
+        return fail(iPhoneMirror::Result::ProtocolError, msg::text(msg::key::VideoFrameLayoutInvalid));
     last_error.clear();
     return static_cast<std::int32_t>(iPhoneMirror::Result::Ok);
 }
@@ -1116,17 +1119,17 @@ std::int32_t IM_CALL im_copy_latest_video_frame_scaled(iPhoneMirror::VideoFrameI
     std::uint32_t max_width, std::uint32_t max_height) {
     if (!info || info->struct_size != sizeof(iPhoneMirror::VideoFrameInfo) || !buffer_size ||
         max_width == 0 || max_height == 0) {
-        return fail(iPhoneMirror::Result::InvalidArgument, L"缩放视频帧参数无效");
+        return fail(iPhoneMirror::Result::InvalidArgument, msg::text(msg::key::ScaledFrameArgumentsInvalid));
     }
     std::shared_ptr<const iPhoneMirror::media::DecodedFrame> frame;
     {
         std::scoped_lock lock(state_mutex);
-        if (!initialized) return fail(iPhoneMirror::Result::NotInitialized, L"核心尚未初始化");
-        if (!capture_session) return fail(iPhoneMirror::Result::CaptureBackendUnavailable, L"当前没有投屏会话");
+        if (!initialized) return fail(iPhoneMirror::Result::NotInitialized, msg::text(msg::key::CoreNotInitialized));
+        if (!capture_session) return fail(iPhoneMirror::Result::CaptureBackendUnavailable, msg::text(msg::key::NoCaptureSession));
         frame = capture_session->latest_frame();
     }
     if (!frame || frame->width == 0 || frame->height == 0) {
-        return fail(iPhoneMirror::Result::CaptureBackendUnavailable, L"正在等待首个解码视频帧");
+        return fail(iPhoneMirror::Result::CaptureBackendUnavailable, msg::text(msg::key::WaitingForFirstFrame));
     }
     const auto width_scale = static_cast<double>(max_width) / frame->width;
     const auto height_scale = static_cast<double>(max_height) / frame->height;
@@ -1137,7 +1140,7 @@ std::int32_t IM_CALL im_copy_latest_video_frame_scaled(iPhoneMirror::VideoFrameI
         static_cast<std::uint32_t>(std::lround(frame->height * scale)));
     const auto required_64 = static_cast<std::uint64_t>(output_width) * output_height * 4U;
     if (required_64 > std::numeric_limits<std::uint32_t>::max()) {
-        return fail(iPhoneMirror::Result::InternalError, L"缩放视频帧尺寸过大");
+        return fail(iPhoneMirror::Result::InternalError, msg::text(msg::key::ScaledFrameTooLarge));
     }
     const auto required = static_cast<std::uint32_t>(required_64);
     info->api_version = iPhoneMirror::ApiVersion;
@@ -1151,7 +1154,7 @@ std::int32_t IM_CALL im_copy_latest_video_frame_scaled(iPhoneMirror::VideoFrameI
     if (!buffer || capacity < required) return static_cast<std::int32_t>(iPhoneMirror::Result::BufferTooSmall);
     const auto conversion_started = std::chrono::steady_clock::now();
     if (!nv12_to_bgra_scaled(*frame, buffer, output_width, output_height)) {
-        return fail(iPhoneMirror::Result::ProtocolError, L"NV12/P010 缩放视频帧布局无效");
+        return fail(iPhoneMirror::Result::ProtocolError, msg::text(msg::key::ScaledFrameLayoutInvalid));
     }
     static std::atomic<std::uint64_t> conversion_count{};
     const auto conversion_number = conversion_count.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -1169,7 +1172,7 @@ std::int32_t IM_CALL im_copy_latest_video_frame_scaled(iPhoneMirror::VideoFrameI
 std::int32_t IM_CALL im_attach_preview_window(void* hwnd) {
     const auto window = static_cast<HWND>(hwnd);
     if (!window || !IsWindow(window)) {
-        return fail(iPhoneMirror::Result::InvalidArgument, L"预览窗口句柄无效");
+        return fail(iPhoneMirror::Result::InvalidArgument, msg::text(msg::key::PreviewWindowInvalid));
     }
     std::scoped_lock owner_lock(preview_window_mutex);
     std::uint32_t target_fps{};
@@ -1185,7 +1188,7 @@ std::int32_t IM_CALL im_attach_preview_window(void* hwnd) {
     {
         std::scoped_lock lock(state_mutex);
         if (!initialized) {
-            return fail(iPhoneMirror::Result::NotInitialized, L"核心尚未初始化");
+            return fail(iPhoneMirror::Result::NotInitialized, msg::text(msg::key::CoreNotInitialized));
         }
         if (preview_renderer && preview_renderer_window == window) {
             preview_renderer->request_refresh();
@@ -1247,12 +1250,12 @@ std::int32_t IM_CALL im_attach_preview_window(void* hwnd) {
         }
         displaced.reset();
         if (!installed) {
-            return fail(iPhoneMirror::Result::NotInitialized, L"核心已在预览初始化期间关闭");
+            return fail(iPhoneMirror::Result::NotInitialized, msg::text(msg::key::CoreShutDownDuringPreviewInit));
         }
         return static_cast<std::int32_t>(iPhoneMirror::Result::Ok);
     } catch (const std::exception& error) {
         return fail(iPhoneMirror::Result::InternalError,
-            L"D3D11 预览初始化失败：" + widen(error.what()));
+            msg::text(msg::key::PreviewInitFailed, widen(error.what())));
     }
 }
 
@@ -1270,10 +1273,10 @@ void IM_CALL im_detach_preview_window() {
 std::int32_t IM_CALL im_force_preview_refresh() {
     std::scoped_lock lock(state_mutex);
     if (!initialized) {
-        return fail(iPhoneMirror::Result::NotInitialized, L"核心尚未初始化");
+        return fail(iPhoneMirror::Result::NotInitialized, msg::text(msg::key::CoreNotInitialized));
     }
     if (!preview_renderer) {
-        return fail(iPhoneMirror::Result::CaptureBackendUnavailable, L"当前没有已连接的预览窗口");
+        return fail(iPhoneMirror::Result::CaptureBackendUnavailable, msg::text(msg::key::NoPreviewWindow));
     }
     preview_renderer->request_refresh();
     iPhoneMirror::logging::write("preview refresh requested");
@@ -1287,11 +1290,11 @@ std::int32_t IM_CALL im_set_preview_corner_profile(float normalized_radius,
         normalized_radius < 0.0F || normalized_radius > 0.5F ||
         curve_exponent < 1.5F || curve_exponent > 8.0F) {
         return fail(iPhoneMirror::Result::InvalidArgument,
-            L"预览圆角参数无效");
+            msg::text(msg::key::PreviewCornerArgumentsInvalid));
     }
     std::scoped_lock lock(state_mutex);
     if (!initialized) {
-        return fail(iPhoneMirror::Result::NotInitialized, L"核心尚未初始化");
+        return fail(iPhoneMirror::Result::NotInitialized, msg::text(msg::key::CoreNotInitialized));
     }
     preview_corner_radius = normalized_radius;
     preview_corner_exponent = curve_exponent;
@@ -1309,11 +1312,11 @@ std::int32_t IM_CALL im_set_video_preferences(std::uint32_t max_width,
     std::uint32_t max_height, std::uint32_t max_fps) {
     if (!valid_video_preferences(max_width, max_height, max_fps)) {
         return fail(iPhoneMirror::Result::InvalidArgument,
-            L"本地渲染尺寸或帧率参数无效");
+            msg::text(msg::key::RenderArgumentsInvalid));
     }
     std::scoped_lock lock(state_mutex);
     if (!initialized) {
-        return fail(iPhoneMirror::Result::NotInitialized, L"核心尚未初始化");
+        return fail(iPhoneMirror::Result::NotInitialized, msg::text(msg::key::CoreNotInitialized));
     }
     capture_preferences.render_max_width = max_width;
     capture_preferences.render_max_height = max_height;
@@ -1354,7 +1357,7 @@ std::int32_t IM_CALL im_set_image_adjustments(float brightness, float contrast,
 std::int32_t IM_CALL im_set_audio_enabled(std::int32_t enabled) {
     std::scoped_lock lock(state_mutex);
     if (!initialized) {
-        return fail(iPhoneMirror::Result::NotInitialized, L"核心尚未初始化");
+        return fail(iPhoneMirror::Result::NotInitialized, msg::text(msg::key::CoreNotInitialized));
     }
     capture_preferences.play_audio = enabled != 0;
     if (capture_session) capture_session->set_audio_enabled(enabled != 0);
@@ -1365,11 +1368,11 @@ std::int32_t IM_CALL im_set_audio_enabled(std::int32_t enabled) {
 std::int32_t IM_CALL im_set_audio_volume(float volume) {
     if (!std::isfinite(volume) || volume < 0.0F || volume > 1.0F) {
         return fail(iPhoneMirror::Result::InvalidArgument,
-            L"音量必须位于 0.0 到 1.0 之间");
+            msg::text(msg::key::VolumeOutOfRange));
     }
     std::scoped_lock lock(state_mutex);
     if (!initialized) {
-        return fail(iPhoneMirror::Result::NotInitialized, L"核心尚未初始化");
+        return fail(iPhoneMirror::Result::NotInitialized, msg::text(msg::key::CoreNotInitialized));
     }
     capture_preferences.audio_volume = volume;
     if (capture_session) capture_session->set_audio_volume(volume);
@@ -1537,7 +1540,7 @@ std::int32_t IM_CALL im_session_stop(iPhoneMirror::SessionHandle handle) {
         snapshot.failure_stage ==
             iPhoneMirror::capture::FailureStage::SessionTeardown) {
         return fail(iPhoneMirror::Result::SessionTeardownFailed,
-            snapshot.message.empty() ? L"投屏停止时 USB 资源恢复失败" : snapshot.message);
+            snapshot.message.empty() ? msg::text(msg::key::UsbRestoreFailed) : snapshot.message);
     }
     if (snapshot.state == iPhoneMirror::capture::State::Stopped &&
         snapshot.failure_stage ==

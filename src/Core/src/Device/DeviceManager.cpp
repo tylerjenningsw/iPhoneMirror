@@ -7,6 +7,7 @@
 #include "Transport/LibUsb0Transport.h"
 #include "Transport/UsbMuxClient.h"
 #include "Logging.h"
+#include "Messages.h"
 
 #include <Windows.h>
 
@@ -17,6 +18,8 @@
 #include <span>
 #include <stdexcept>
 #include <utility>
+
+namespace msg = iPhoneMirror::messages;
 
 namespace iPhoneMirror::device {
 namespace {
@@ -66,7 +69,7 @@ void enrich_from_lockdown(transport::Socket& socket, DeviceRecord& record) {
         {"Request", plist::Value::String("GetValue")},
     }));
     if (const auto* error = response.find("Error")) {
-        record.status = L"设备已连接，但 Lockdown 拒绝访问：" + widen(error->string_or());
+        record.status = msg::text(msg::key::DeviceLockdownDenied, widen(error->string_or()));
         return;
     }
     const auto* values = response.find("Value");
@@ -106,15 +109,15 @@ void enrich_from_lockdown(transport::Socket& socket, DeviceRecord& record) {
         record.udid = widen(mux_device.serial);
         record.connection_type = widen(mux_device.connection_type.empty() ? "USB" : mux_device.connection_type);
         record.name = L"iPhone";
-        record.status = L"USB 已连接";
+        record.status = msg::text(msg::key::DeviceUsbConnected);
 
         try {
             record.pair_record_present = mux.has_pair_record(mux_device.serial);
             if (record.pair_record_present) {
                 record.state = ConnectionState::Paired;
-                record.status = L"已配对，正在验证设备会话";
+                record.status = msg::text(msg::key::DevicePairedValidating);
             } else {
-                record.status = L"等待在 iPhone 上信任此电脑";
+                record.status = msg::text(msg::key::DeviceAwaitingTrust);
             }
         } catch (...) {
             // Device listing is still useful even if this daemon cannot expose pair records.
@@ -124,10 +127,10 @@ void enrich_from_lockdown(transport::Socket& socket, DeviceRecord& record) {
             enrich_from_lockdown(lockdown, record);
             if (record.lockdown_accessible) {
                 record.state = ConnectionState::Ready;
-                record.status = record.pair_record_present ? L"已连接并已配对" : L"已连接；设备信息可读，配对记录未确认";
+                record.status = record.pair_record_present ? msg::text(msg::key::DeviceConnectedPaired) : msg::text(msg::key::DeviceConnectedPairingUnconfirmed);
             }
         } catch (const std::exception&) {
-            if (record.pair_record_present) record.status = L"已配对；请解锁 iPhone 后重试";
+            if (record.pair_record_present) record.status = msg::text(msg::key::DevicePairedUnlockRequired);
         }
         const bool peer_closed =
             lockdown.shutdown_send_and_wait_for_peer_close();
@@ -263,35 +266,35 @@ EnvironmentRecord DeviceManager::environment() const {
 
     if (result.standard_mux && result.libusb0_apple_devices_known &&
         result.libusb0_apple_devices > 0) {
-        result.diagnostic = L"Apple 配对通道与 libusb0 直接采集后端已就绪。";
+        result.diagnostic = msg::text(msg::key::EnvLibUsb0Ready);
     } else if (!result.service_installed && !result.capture_mux) {
-        result.diagnostic = L"未检测到 Apple Mobile Device Support。请安装 Apple Devices 或 iTunes 驱动；有线采集还需要兼容的 USB 过滤驱动。";
+        result.diagnostic = msg::text(msg::key::EnvAppleSupportMissing);
     } else if (!result.service_running && !result.capture_mux) {
-        result.diagnostic = L"Apple Devices 已安装，但后台 USB 服务尚未运行。连接并解锁 iPhone 后应自动启动；若未启动请打开 Apple Devices 修复。";
+        result.diagnostic = msg::text(msg::key::EnvAppleServiceNotRunning);
     } else if (result.standard_mux && result.libusb_apple_devices_known &&
         result.libusb_apple_devices > 0) {
-        result.diagnostic = L"Apple 配对通道和 libusb 设备枚举可用；开始投屏时将验证隐藏配置访问权限。";
+        result.diagnostic = msg::text(msg::key::EnvLibUsbEnumerationReady);
     } else if (result.standard_mux) {
-        result.diagnostic = L"Apple 配对通道可用；连接 iPhone 后将检测直接 QuickTime USB 后端。";
+        result.diagnostic = msg::text(msg::key::EnvPairingReady);
     } else if (result.capture_mux) {
-        result.diagnostic = L"Windows 采集 usbmuxd 已就绪。";
+        result.diagnostic = msg::text(msg::key::EnvCaptureMuxReady);
     } else {
-        result.diagnostic = L"Apple USB 服务存在，但 usbmux 端口不可用。";
+        result.diagnostic = msg::text(msg::key::EnvUsbMuxUnavailable);
     }
     if (result.libusb_runtime) {
-        result.diagnostic += L" libusb " + result.libusb_version + L" 已加载";
+        msg::append(result.diagnostic, msg::key::EnvLibUsbLoaded, result.libusb_version);
         if (result.usbdk_backend_known) {
-            result.diagnostic += result.usbdk_backend
-                ? L"，UsbDk 后端可用。"
-                : L"，UsbDk 后端不可用。";
+            msg::append(result.diagnostic, result.usbdk_backend
+                ? msg::key::EnvUsbDkAvailable
+                : msg::key::EnvUsbDkUnavailable);
         } else {
-            result.diagnostic += L"，UsbDk 后端尚未探测（开始投屏时才会访问 USB 后端）。";
+            msg::append(result.diagnostic, msg::key::EnvUsbDkUnprobed);
         }
     } else {
-        result.diagnostic += L" libusb 用户态运行库不可用。";
+        msg::append(result.diagnostic, msg::key::EnvLibUsbRuntimeMissing);
     }
     if (result.libusb0_available) {
-        result.diagnostic += L" libusb0 运行库文件存在；设备枚举将在开始投屏时进行。";
+        msg::append(result.diagnostic, msg::key::EnvLibUsb0Present);
     }
     return result;
 }

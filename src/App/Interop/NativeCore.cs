@@ -646,7 +646,7 @@ internal sealed class NativeCore : IDisposable
         var result = im_get_environment(ref info);
         if (result != 0) throw new InvalidOperationException(GetLastError(
             LocalizationService.Get("ReadEnvironmentFailed")));
-        return info;
+        return LocalizeEnvironment(info);
     }
 
     /// <summary>
@@ -703,6 +703,7 @@ internal sealed class NativeCore : IDisposable
                     LocalizationService.Get("ReadDeviceInfoFailed")));
             if (result != 0) throw new InvalidOperationException(GetLastError(
                 LocalizationService.Get("ReadDeviceInfoFailed")));
+            LocalizeDeviceStatus(devices, capacity);
             return devices.Take(checked((int)Math.Min(capacity, (uint)devices.Length))).ToArray();
         }
 
@@ -813,6 +814,7 @@ internal sealed class NativeCore : IDisposable
             if (result == (int)NativeResult.BufferTooSmall) continue;
             if (result != 0) throw new InvalidOperationException(GetLastError(
                 LocalizationService.Get("EnumerateDevicesFailed")));
+            LocalizeDeviceStatus(devices, capacity);
             return devices.Take(checked((int)Math.Min(capacity, (uint)devices.Length))).ToArray();
         }
         throw new InvalidOperationException(LocalizationService.Get("EnumerateDevicesFailed"));
@@ -908,7 +910,7 @@ internal sealed class NativeCore : IDisposable
         var result = im_session_get_status(handle.RawHandle, ref status);
         if (result != 0) throw new InvalidOperationException(GetLastError(
             LocalizationService.Get("ReadCaptureStatusFailed")));
-        return status;
+        return LocalizeStatus(status);
     }
 
     public long GetDeviceSessionLatestFrameTimestamp(NativeSessionHandle? handle)
@@ -1101,7 +1103,7 @@ internal sealed class NativeCore : IDisposable
         var result = im_get_capture_status(ref status);
         if (result != 0) throw new InvalidOperationException(GetLastError(
             LocalizationService.Get("ReadCaptureStatusFailed")));
-        return status;
+        return LocalizeStatus(status);
     }
 
     public VideoFrame? GetLatestVideoFrame()
@@ -1213,10 +1215,32 @@ internal sealed class NativeCore : IDisposable
         finally { if (added) handle.DangerousRelease(); }
     }
 
+    // Native text reaches managed code only through this method, the device
+    // list fill loops and the status readers below. Each converts the core's
+    // message keys to the active UI language exactly once (see NativeMessages).
     private static string GetLastError(string fallback)
     {
         var pointer = im_last_error();
-        return pointer == 0 ? fallback : Marshal.PtrToStringUni(pointer) ?? fallback;
+        var message = pointer == 0 ? null : Marshal.PtrToStringUni(pointer);
+        return string.IsNullOrEmpty(message) ? fallback : NativeMessages.Localize(message);
+    }
+
+    private static void LocalizeDeviceStatus(NativeDeviceInfo[] devices, uint written)
+    {
+        for (var i = 0; i < written && i < devices.Length; ++i)
+            devices[i].Status = NativeMessages.Localize(devices[i].Status);
+    }
+
+    private static NativeCaptureStatus LocalizeStatus(NativeCaptureStatus status)
+    {
+        status.Message = NativeMessages.Localize(status.Message);
+        return status;
+    }
+
+    private static NativeEnvironmentInfo LocalizeEnvironment(NativeEnvironmentInfo info)
+    {
+        info.Diagnostic = NativeMessages.Localize(info.Diagnostic);
+        return info;
     }
 
     public void Dispose()

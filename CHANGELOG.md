@@ -5,6 +5,21 @@ All notable changes to iPhoneMirror are documented here. The project follows
 
 ## [Unreleased]
 
+### Changed
+
+- Localization now has one source of truth per concern. The main app, the
+  driver manager and the tests resolve languages through a shared
+  `LanguageCatalog`, and the stored language preference is read by one shared
+  helper, so adding a language is a data-only change (see
+  `docs/LOCALIZATION.md`).
+- The native core no longer emits Chinese text. Device status, environment
+  diagnostics, capture status and `im_last_error` carry message keys that the
+  app translates through the regular resource dictionaries, so English (and any
+  future language) now covers native errors and diagnostics as well.
+- Startup-error captions are read from the language dictionaries, with a single
+  English last-resort copy that the localization audit keeps equal to the
+  `en-US` resources.
+
 ### Fixed
 
 - Isolate multi-device keyboard writes so a stalled device cannot block another

@@ -1,33 +1,32 @@
 using System.Globalization;
-using System.IO;
 using System.Windows;
 using IPhoneMirror.App.Services;
 using IPhoneMirror.App.Updater;
+using IPhoneMirror.Shared.Localization;
 
 namespace IPhoneMirror.App.Localization;
 
+/// <summary>
+/// WPF-side language switching for the main app. Which languages exist and how
+/// a culture maps onto them is owned by <see cref="LanguageCatalog"/>; this
+/// class only swaps the merged resource dictionary and the thread cultures.
+/// </summary>
 internal static class LocalizationService
 {
-    internal const string SystemLanguage = "system";
-    internal const string SimplifiedChinese = "zh-CN";
-    internal const string TraditionalChineseHongKong = "zh-HK";
-    internal const string English = "en-US";
-
-    private const string DictionaryPrefix = "Localization/Strings.";
-    private static readonly string SettingsPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "iPhoneMirror", "settings.json");
+    internal const string SystemLanguage = LanguageCatalog.SystemLanguage;
+    internal const string SimplifiedChinese = LanguageCatalog.SimplifiedChinese;
+    internal const string TraditionalChineseHongKong = LanguageCatalog.TraditionalChineseHongKong;
+    internal const string English = LanguageCatalog.English;
 
     private static string _selectedLanguage = SystemLanguage;
-    private static CultureInfo _effectiveCulture = CultureInfo.GetCultureInfo(English);
+    private static CultureInfo _effectiveCulture = CultureInfo.GetCultureInfo(LanguageCatalog.Fallback);
 
     internal static event EventHandler? LanguageChanged;
 
     internal static string SelectedLanguage => _selectedLanguage;
     internal static CultureInfo EffectiveCulture => _effectiveCulture;
-    internal static string StartupCultureName => _selectedLanguage == SystemLanguage
-        ? ResolveCultureName(CultureInfo.InstalledUICulture.Name)
-        : ResolveCultureName(_selectedLanguage);
+    internal static string StartupCultureName =>
+        LanguageCatalog.ResolvePreference(_selectedLanguage);
 
     internal static void Initialize()
     {
@@ -72,13 +71,8 @@ internal static class LocalizationService
 
     private static void ApplyLanguage(string language, bool persist, bool notify)
     {
-        if (language is not (SystemLanguage or SimplifiedChinese or
-            TraditionalChineseHongKong or English))
-            language = SystemLanguage;
-
-        var cultureName = language == SystemLanguage
-            ? ResolveSystemCulture()
-            : language;
+        language = LanguageCatalog.NormalizePreference(language);
+        var cultureName = LanguageCatalog.ResolvePreference(language);
         var culture = CultureInfo.GetCultureInfo(cultureName);
 
         // Record the requested language before loading its resource dictionary so a
@@ -90,15 +84,13 @@ internal static class LocalizationService
             var dictionaries = application.Resources.MergedDictionaries;
             var replacement = new ResourceDictionary
             {
-                Source = new Uri(
-                    $"/{typeof(LocalizationService).Assembly.GetName().Name};component/" +
-                    $"{DictionaryPrefix}{cultureName}.xaml", UriKind.Relative),
+                Source = LanguageCatalog.DictionaryUri(
+                    typeof(LocalizationService).Assembly.GetName().Name!, cultureName),
             };
             var existingIndex = -1;
             for (var index = 0; index < dictionaries.Count; ++index)
             {
-                var source = dictionaries[index].Source?.OriginalString;
-                if (source?.Contains(DictionaryPrefix, StringComparison.OrdinalIgnoreCase) == true)
+                if (LanguageCatalog.IsDictionarySource(dictionaries[index].Source?.OriginalString))
                 {
                     existingIndex = index;
                     break;
@@ -118,45 +110,16 @@ internal static class LocalizationService
         if (notify) LanguageChanged?.Invoke(null, EventArgs.Empty);
     }
 
-    private static string ResolveSystemCulture() =>
-        ResolveCultureName(CultureInfo.InstalledUICulture.Name);
+    internal static string ResolveCultureName(string cultureName) =>
+        LanguageCatalog.ResolveCultureName(cultureName);
 
-    internal static string ResolveCultureName(string cultureName)
-    {
-        if (IsHongKongTraditionalChinese(cultureName))
-            return TraditionalChineseHongKong;
-        return cultureName.StartsWith("zh", StringComparison.OrdinalIgnoreCase)
-            ? SimplifiedChinese
-            : English;
-    }
-
-    private static bool IsHongKongTraditionalChinese(string cultureName) =>
-        cultureName.StartsWith("zh-Hant", StringComparison.OrdinalIgnoreCase) ||
-        cultureName.Equals("zh-CHT", StringComparison.OrdinalIgnoreCase) ||
-        cultureName.Equals(TraditionalChineseHongKong,
-            StringComparison.OrdinalIgnoreCase) ||
-        cultureName.Equals("zh-MO", StringComparison.OrdinalIgnoreCase) ||
-        cultureName.Equals("zh-TW", StringComparison.OrdinalIgnoreCase);
-
-    private static string LoadLanguage()
-    {
-        try
-        {
-            if (!File.Exists(SettingsPath)) return SystemLanguage;
-            return new UpdateSettingsStore(SettingsPath).Load().Language;
-        }
-        catch (Exception error)
-        {
-            DiagnosticLogger.Exception("localization", "language_load_failed", error);
-            return SystemLanguage;
-        }
-    }
+    private static string LoadLanguage() => LanguagePreference.Read();
 
     private static void SaveLanguage(string language)
     {
         try
         {
-            new UpdateSettingsStore(SettingsPath).Update(settings =>
+            new UpdateSettingsStore(LanguagePreference.SettingsPath).Update(settings =>
                 settings.Language = language);
         }
         catch (Exception error)

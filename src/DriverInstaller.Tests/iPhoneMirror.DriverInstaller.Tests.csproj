@@ -9,6 +9,10 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="..\DriverInstaller\GlobalUsings.cs" Link="GlobalUsings.cs" />
+    <Compile Include="..\Shared\Localization\LanguageCatalog.cs"
+             Link="Localization\LanguageCatalog.cs" />
+    <Compile Include="..\Shared\Localization\LanguagePreference.cs"
+             Link="Localization\LanguagePreference.cs" />
     <Compile Include="..\Shared\Networking\SegmentedHttpDownloader.cs" Link="Networking\SegmentedHttpDownloader.cs" />
     <Compile Include="..\Shared\Security\ElevationPathLock.cs" Link="Security\ElevationPathLock.cs" />
     <Compile Include="..\DriverInstaller\Models\DriverModels.cs" Link="DriverModels.cs" />

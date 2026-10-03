@@ -7,6 +7,7 @@
 #include "Media/MediaFoundationDecoder.h"
 #include "Audio/WasapiRenderer.h"
 #include "Logging.h"
+#include "Messages.h"
 #include "Protocol/QuickTimePacket.h"
 #include "Transport/LibUsb0Transport.h"
 #include "Transport/QtUsbTransport.h"
@@ -30,6 +31,8 @@
 #include <optional>
 #include <utility>
 #include <vector>
+
+namespace msg = iPhoneMirror::messages;
 
 namespace iPhoneMirror::capture {
 namespace {
@@ -221,7 +224,7 @@ DecoderRuntimeMode decoder_runtime_mode(media::DecoderAcceleration acceleration)
 std::wstring widen(std::string_view utf8) {
     if (utf8.empty()) return {};
     const int length = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
-    if (length <= 0) return L"未知错误";
+    if (length <= 0) return msg::text(msg::key::UnknownError);
     std::wstring result(static_cast<std::size_t>(length), L'\0');
     MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), result.data(), length);
     return result;
@@ -920,7 +923,7 @@ void CaptureSession::start(bool use_usbdk) {
                 failure, attempts));
         }
         preflight_device_ = std::move(selected_device);
-        set_state(State::ActivatingUsb, L"正在激活 QuickTime USB 配置");
+        set_state(State::ActivatingUsb, msg::text(msg::key::CaptureActivatingUsb));
         worker_ = std::jthread([this](std::stop_token token) { run(token); });
     } catch (...) {
         release_usb_transition_gate();
@@ -947,7 +950,7 @@ void CaptureSession::stop() noexcept {
         // stop() is noexcept, so swallow allocation failures here to keep the
         // previous state/message instead of invoking std::terminate.
         if (!terminal_error_already_published)
-            try { set_state(State::Stopping, L"正在停止投屏"); } catch (...) {}
+            try { set_state(State::Stopping, msg::text(msg::key::CaptureStopping)); } catch (...) {}
         worker_.request_stop();
         // Cancel pending I/O only on transports that implement a safe cancel.
         // The legacy libusb0 transport deliberately treats this callback as a
@@ -965,7 +968,7 @@ void CaptureSession::stop() noexcept {
         // warning. Reapplying Stopped clears that warning in set_state().
         if (!terminal_error_already_published && terminal_state != State::Error &&
             terminal_state != State::Stopped)
-            try { set_state(State::Stopped, L"投屏已停止"); } catch (...) {}
+            try { set_state(State::Stopped, msg::text(msg::key::CaptureStopped)); } catch (...) {}
     }
     // Decoded frames are immutable but device-specific. Do not let the native
     // preview or screenshot path expose the previous iPhone after a stop and
@@ -1332,7 +1335,7 @@ void CaptureSession::run(std::stop_token stop_token) noexcept {
             set_stopped_warning(FailureKind::UsbConnection,
                 FailureStage::SessionTeardown,
                 -2108,
-                L"投屏停止时未确认 Apple USB 设备恢复普通配置；已释放投屏资源，请重新插拔数据线后再试");
+                msg::text(msg::key::CaptureUsbRestoreUnconfirmed));
         }
         return restored;
     };
@@ -1389,7 +1392,7 @@ void CaptureSession::run(std::stop_token stop_token) noexcept {
                 quicktime_activation_requested = true;
                 newly_activated_libusb0 = true;
                 set_state(State::WaitingForDevice,
-                    L"等待 Apple 设备以 QuickTime 配置重新连接");
+                    msg::text(msg::key::CaptureAwaitingReconnect));
                 failure_stage = FailureStage::DeviceReenumeration;
                 failure_code = -2102;
                 const bool activation_acknowledged =
@@ -1421,7 +1424,7 @@ void CaptureSession::run(std::stop_token stop_token) noexcept {
                     device_fp, activation_acknowledged,
                     identity.expected_quicktime_configuration));
                 if (stop_token.stop_requested()) {
-                    set_state(State::Stopped, L"投屏已取消");
+                    set_state(State::Stopped, msg::text(msg::key::CaptureCancelled));
                     return;
                 }
                 logging::write(std::format(
@@ -1501,7 +1504,7 @@ void CaptureSession::run(std::stop_token stop_token) noexcept {
                     identity.expected_quicktime_configuration));
                 qt_context.reset();
                 set_state(State::WaitingForDevice,
-                    L"等待 Apple 设备以 QuickTime 配置重新连接");
+                    msg::text(msg::key::CaptureAwaitingReconnect));
                 failure_stage = FailureStage::DeviceReenumeration;
                 failure_code = -2102;
                 const auto deadline = std::chrono::steady_clock::now() +
@@ -1510,7 +1513,7 @@ void CaptureSession::run(std::stop_token stop_token) noexcept {
                 do {
                     if (stop_token.stop_requested()) {
                         qt_context.reset();
-                        set_state(State::Stopped, L"投屏已取消");
+                        set_state(State::Stopped, msg::text(msg::key::CaptureCancelled));
                         return;
                     }
                     std::this_thread::sleep_for(std::chrono::milliseconds(250));
@@ -1581,7 +1584,7 @@ void CaptureSession::run(std::stop_token stop_token) noexcept {
         active_backend_release.arm([active_backend] {
             release_active_usb_backend(active_backend);
         });
-        set_state(State::Handshaking, L"已连接 QuickTime 端点，等待 PING");
+        set_state(State::Handshaking, msg::text(msg::key::CaptureAwaitingPing));
         failure_stage = FailureStage::QuickTimeHandshake;
         failure_kind = FailureKind::Timeout;
         failure_code = -2104;
@@ -1983,7 +1986,7 @@ void CaptureSession::run(std::stop_token stop_token) noexcept {
             {
                 std::scoped_lock lock(mutex_);
                 snapshot_.fps = 0;
-                snapshot_.message = L"画面帧率不可用，正在重新连接投屏";
+                snapshot_.message = msg::text(msg::key::CaptureReconnectingNoFrames);
                 snapshot_.state = State::Handshaking;
             }
             logging::write(
@@ -2321,7 +2324,7 @@ void CaptureSession::run(std::stop_token stop_token) noexcept {
                         audio_age_ns <= std::chrono::duration_cast<
                             std::chrono::nanoseconds>(std::chrono::seconds(3)).count();
                     snapshot_.message = !video_protected
-                        ? L"投屏中"
+                        ? msg::text(msg::key::CaptureStreaming)
                         : audio_active
                             ? L"DRM_VIDEO_PROTECTED_AUDIO_ACTIVE"
                             : L"DRM_VIDEO_PROTECTED_AUDIO_INACTIVE";
@@ -2417,7 +2420,7 @@ void CaptureSession::run(std::stop_token stop_token) noexcept {
         transition_release.run_now();
         release_usb_transition_gate();
         logging::write("capture_run stop path");
-        if (restored) set_state(State::Stopped, L"投屏已停止");
+        if (restored) set_state(State::Stopped, msg::text(msg::key::CaptureStopped));
     } catch (const std::exception& error) {
         // Stop requests intentionally interrupt USB I/O while iOS restores
         // its normal configuration. This is a normal terminal condition.
@@ -2436,7 +2439,7 @@ void CaptureSession::run(std::stop_token stop_token) noexcept {
         logging::write(std::format("capture_run exception stop_requested={} error={}",
             stop_token.stop_requested(), error.what()));
         if (stopped_by_request) {
-            if (restored) set_state(State::Stopped, L"投屏已停止");
+            if (restored) set_state(State::Stopped, msg::text(msg::key::CaptureStopped));
         } else {
             std::string diagnostic = error.what();
             if (!restored) {
@@ -2467,7 +2470,7 @@ void CaptureSession::run(std::stop_token stop_token) noexcept {
                 failure_kind = FailureKind::Driver;
             }
             set_failure(failure_kind, failure_stage, failure_code,
-                L"采集失败：" + widen(diagnostic));
+                msg::text(msg::key::CaptureFailed, widen(diagnostic)));
         }
     }
 }

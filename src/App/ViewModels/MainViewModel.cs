@@ -2776,17 +2776,6 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
                 LocalizationService.Format("ReverseControlErrorCodeFormat", bridgeEvent.Code))
             : bridgeEvent.Message!;
 
-    internal void ShowControlOperationError(string transport, string detail, string technicalDetails)
-    {
-        if (ControlStatus.Current is null)
-            ControlStatus.Begin(transport switch
-            {
-                "蓝牙" or "藍牙" or "Bluetooth" => ControlStatusMode.Bluetooth,
-                "无线" or "無線" or "wireless" => ControlStatusMode.Wireless,
-                _ => ControlStatusMode.Usb,
-            }, SelectedDevice?.Name ?? "iPhone");
-        ShowReverseControlError(transport, detail, technicalDetails: technicalDetails);
-    }
 
     private void ShowReverseControlError(string transport, string? detail,
         string titleKey = "ReverseControlStartErrorTitle", string? technicalDetails = null,

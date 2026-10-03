@@ -13,6 +13,7 @@ using IPhoneMirror.App.Interop;
 using IPhoneMirror.App.Services;
 using IPhoneMirror.App.Models;
 using IPhoneMirror.App.Updater;
+using IPhoneMirror.Shared.Localization;
 using IPhoneMirror.Shared.Networking;
 using IPhoneMirror.SharedUI.Services;
 
@@ -524,7 +525,7 @@ var protectedWithAudio = ProtectedContentStatus.Parse(
     ProtectedContentStatus.AudioActiveMarker, 48000, 2);
 Equal(true, protectedWithAudio.IsProtected && protectedWithAudio.AudioActive,
     "protected content marker reports recent audio samples independently");
-Equal(false, ProtectedContentStatus.Parse("投屏中", 48000, 2).IsProtected,
+Equal(false, ProtectedContentStatus.Parse("NativeCaptureStreaming", 48000, 2).IsProtected,
     "ordinary streaming status is not classified as protected content");
 Equal(true, mainViewModelSource.Contains(
         "IsVideoProtected => CurrentDeviceSession?.VideoProtected == true",
@@ -2298,15 +2299,71 @@ Equal(false, SemanticVersion.TryParse("1.02.0", out _),
     "semantic version rejects leading zeroes");
 Equal(false, SemanticVersion.TryParse("1.2.0-beta.02", out _),
     "semantic version rejects leading zeroes in numeric prerelease identifiers");
+// This process has no resource dictionaries, so startup diagnostics must fall
+// back to the embedded English captions for every language. The translated
+// output is verified against the real dictionaries by the runtime tests.
 Equal(true, StartupDiagnostics.UserMessage(new DllNotFoundException(), true)
-    .Contains("原生组件", StringComparison.Ordinal),
-    "startup diagnostics explain native dependency load failures");
+    .Contains("native component", StringComparison.OrdinalIgnoreCase),
+    "startup diagnostics explain native dependency load failures without dictionaries");
 Equal(true, StartupDiagnostics.UserMessage(new FileNotFoundException(), false)
     .Contains("native component", StringComparison.OrdinalIgnoreCase),
     "startup preflight missing-file failures use native dependency guidance");
-Equal(true, StartupDiagnostics.UserMessage(new DllNotFoundException(), "zh-HK")
-    .Contains("原生元件", StringComparison.Ordinal),
-    "Hong Kong startup diagnostics use localized native dependency guidance");
+Equal(true, StartupDiagnostics.UserMessage(new InvalidOperationException(), "zh-HK")
+    .Contains("during startup", StringComparison.OrdinalIgnoreCase),
+    "other startup failures use the generic guidance");
+Equal("Close", StartupDiagnostics.Label("StartupErrorClose", "zh-CN"),
+    "startup captions fall back to English when the dictionary is unavailable");
+Equal(LanguageCatalog.TraditionalChineseHongKong, LanguageCatalog.ResolveCultureName("zh-Hant-TW"),
+    "Traditional Chinese variants share the Hong Kong dictionary");
+Equal(LanguageCatalog.SimplifiedChinese, LanguageCatalog.ResolveCultureName("zh-SG"),
+    "other Chinese variants use Simplified Chinese");
+Equal(LanguageCatalog.English, LanguageCatalog.ResolveCultureName("en-GB"),
+    "a language subtag matches the shipped dictionary for that language");
+Equal(LanguageCatalog.English, LanguageCatalog.ResolveCultureName("de-DE"),
+    "unsupported languages fall back to English");
+Equal(LanguageCatalog.SystemLanguage, LanguageCatalog.NormalizePreference("fr-FR"),
+    "unknown stored preferences follow the system language");
+Equal(LanguageCatalog.English, LanguageCatalog.NormalizePreference("EN-us"),
+    "stored preferences are matched case-insensitively");
+Equal(LanguageCatalog.SystemLanguage, LanguageCatalog.NormalizePreference(null),
+    "a missing preference follows the system language");
+Equal(true, NativeMessages.TryParse("NativeUsbOpenFailed: LIBUSB_ERROR_ACCESS; retry later",
+        out var nativeKey, out var nativeDetail) &&
+    nativeKey == "NativeUsbOpenFailed" && nativeDetail == "LIBUSB_ERROR_ACCESS; retry later",
+    "native message keys keep their complete technical detail");
+Equal(false, NativeMessages.TryParse("DRM_VIDEO_PROTECTED", out _, out _),
+    "protocol markers are not native message keys");
+Equal(true, NativeMessages.TryParseChain("NativeEnvLibUsbLoaded: 1.0.27; NativeEnvUsbDkUnprobed", out var detailFirstChain) &&
+    detailFirstChain.Count == 2 && detailFirstChain[0] == ("NativeEnvLibUsbLoaded", "1.0.27") &&
+    detailFirstChain[1] == ("NativeEnvUsbDkUnprobed", null),
+    "a chain whose first message carries a detail still splits at the next key");
+Equal(true, NativeMessages.TryParseChain("NativeUsbOpenFailed: LIBUSB_ERROR_ACCESS; retry later", out var detailChain) &&
+    detailChain.Count == 1 && detailChain[0] == ("NativeUsbOpenFailed", "LIBUSB_ERROR_ACCESS; retry later"),
+    "non-keyed segments stay inside the preceding detail");
+Equal(false, NativeMessages.TryParseChain("libusb; NativeEnvUsbDkUnprobed", out _),
+    "text that does not start with a key is not a chain");
+Equal(false, NativeMessages.TryParseChain("NativeEnvUsbDkUnprobed; retry later", out _),
+    "a detail-free message cannot be followed by non-keyed text");
+var preferenceFile = Path.Combine(Path.GetTempPath(), $"iPhoneMirror-language-{Guid.NewGuid():N}.json");
+try
+{
+    File.WriteAllText(preferenceFile, "{\"language\":\"zh-HK\"}");
+    Equal(LanguageCatalog.TraditionalChineseHongKong, LanguagePreference.Read(preferenceFile),
+        "stored language preference is read case-insensitively like the settings store");
+    File.WriteAllText(preferenceFile, "{\"Language\":\"en-US\",\"Theme\":\"Dark\"}");
+    Equal(LanguageCatalog.English, LanguagePreference.Read(preferenceFile),
+        "stored language preference is read from the full settings file");
+    File.WriteAllText(preferenceFile, "not json");
+    Equal(LanguageCatalog.SystemLanguage, LanguagePreference.Read(preferenceFile),
+        "a malformed settings file follows the system language");
+}
+finally { File.Delete(preferenceFile); }
+Equal("DRM_VIDEO_PROTECTED", NativeMessages.Localize("DRM_VIDEO_PROTECTED"),
+    "protocol markers pass through native message localization unchanged");
+Equal("NativeCoreNotInitialized", NativeMessages.Localize("NativeCoreNotInitialized"),
+    "native message keys stay intact when no dictionary defines them");
+Equal("[set_configuration] could not set config", NativeMessages.Localize("[set_configuration] could not set config"),
+    "raw libusb diagnostics pass through unchanged");
 var bridgeRuntimeTestRoot = Path.Combine(Path.GetTempPath(),
     $"iPhoneMirror-bridge-runtime-{Guid.NewGuid():N}");
 try

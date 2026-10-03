@@ -148,6 +148,25 @@ if ($missing.Count -ne 0) {
     throw "Missing localization keys: $($missing -join ', ')"
 }
 
+# The native core emits message keys declared in Messages.h; the managed host
+# translates them, so every key needs a string in each dictionary and the core
+# itself must not carry CJK text.
+$nativeHeader = Get-Content -Raw -LiteralPath (Join-Path $Root 'src\Core\src\Messages.h') -Encoding utf8
+$nativeKeys = @([regex]::Matches($nativeHeader, 'L"(Native[A-Za-z0-9]+)"') |
+    ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+if ($nativeKeys.Count -eq 0) { throw 'No native message keys found in src/Core/src/Messages.h.' }
+$nativeMissing = @($nativeKeys + 'NativeMessageDetailFormat' | Where-Object { $_ -notin $English } | Sort-Object)
+if ($nativeMissing.Count -ne 0) {
+    throw "Missing native message localization keys: $($nativeMissing -join ', ')"
+}
+$cjk = [regex]'[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]'
+Get-ChildItem -LiteralPath (Join-Path $Root 'src\Core\src'), (Join-Path $Root 'src\Core\include') -Recurse -File -Include *.cpp,*.h |
+    ForEach-Object {
+        if ($cjk.IsMatch((Get-Content -Raw -LiteralPath $_.FullName -Encoding utf8))) {
+            throw "Native code must emit message keys instead of CJK text: $($_.FullName)"
+        }
+    }
+
 $DriverChinesePath = Join-Path $DriverInstaller 'Localization\Strings.zh-CN.xaml'
 $DriverHongKongPath = Join-Path $DriverInstaller 'Localization\Strings.zh-HK.xaml'
 $DriverEnglishPath = Join-Path $DriverInstaller 'Localization\Strings.en-US.xaml'
@@ -189,4 +208,5 @@ if ($driverMissing.Count -ne 0) {
     DriverEnglishKeys = $DriverEnglish.Count
     DriverReferencedKeys = $driverUsed.Count
     ThemeKeys = $LightThemeResources.Count
+    NativeMessageKeys = $nativeKeys.Count
 }

@@ -14,7 +14,17 @@ import re
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
-LANGUAGES = ('zh-CN', 'zh-HK', 'en-US')
+
+
+def shared_languages():
+    """Read the shipped language list from the shared C# catalog (single source of truth)."""
+    source = (ROOT/'src/Shared/Localization/LanguageCatalog.cs').read_text(encoding='utf-8')
+    constants = dict(re.findall(r'internal const string (\w+) = "([^"]+)";', source))
+    names = re.search(r'Supported =\s*\[([^\]]+)\]', source)[1]
+    return tuple(constants[name.strip()] for name in names.split(',') if name.strip())
+
+
+LANGUAGES = shared_languages()
 XKEY = '{http://schemas.microsoft.com/winfx/2006/xaml}Key'
 TOKEN = re.compile(r'(?<!\{)\{(?:\d+|[A-Za-z_]\w*)(?:,[^}:]+)?(?::[^}]+)?\}(?!\})|%(?:\d+\$)?[sd]|%[1-9]|%[A-Z_][A-Z0-9_]*%|\[(?:name(?:/ver)?|gb|mb)\]')
 EXCLUDED = {'bin', 'obj', 'native', 'Assets', '_internal', '.git', '__pycache__'}
@@ -105,18 +115,62 @@ def hardcoded_resources(inventory):
                 key = f'{path.relative_to(ROOT).as_posix()} / node {index} / {attribute}'
                 for lang in LANGUAGES:
                     shared[lang][key] = value
+    return shared
+
+
+def startup_fallback(catalog, errors):
+    """The startup window's English last-resort captions must mirror en-US exactly.
+
+    StartupDiagnostics reads every caption from the language dictionaries and only
+    uses its embedded English text when no dictionary can be loaded. Each embedded
+    entry therefore has to exist in every dictionary and equal the en-US value, so
+    the fallback can never drift from the real resources.
+    """
     startup = (ROOT/'src/App/Services/StartupDiagnostics.cs').read_text(encoding='utf-8')
-    body = startup.split('internal static string UserMessage(Exception error, string language)', 1)[1]
-    body = body.split('private static bool Find', 1)[0]
-    # Conditional Chinese expressions do not end in a semicolon.
-    values = re.findall(r'(?:return|\?|:)\s*"([^"\n]+)"', body)
-    fallback = {lang: {} for lang in LANGUAGES}
-    if len(values) != 6:
+    body = startup.split('FallbackText =', 1)[1].split('};', 1)[0]
+    entries = re.findall(r'\["(\w+)"\]\s*=\s*"((?:[^"\\]|\\.)*)"', body)
+    if len(entries) < 5:
         raise ValueError('Review StartupDiagnostics fallback inventory after code changes')
-    for index, key in enumerate(('NativeComponentLoadFailure', 'StartupFailure')):
-        for lang, value in zip(('zh-HK', 'zh-CN', 'en-US'), values[index*3:index*3+3]):
-            fallback[lang][f'StartupDiagnostics.UserMessage/{key}'] = value
-    return shared, fallback
+    result = {lang: {} for lang in LANGUAGES}
+    for key, english in entries:
+        for lang in LANGUAGES:
+            if key in catalog[lang]:
+                result[lang][key] = catalog[lang][key]
+            else:
+                errors.append(f'StartupFallback/{key}: missing {lang}')
+        if catalog['en-US'].get(key) != english:
+            errors.append(f'StartupFallback/{key}: embedded English differs from en-US resource')
+    return result
+
+
+CJK = re.compile(r'[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]')
+
+
+def native_messages(catalog, errors):
+    """Native code emits message keys from Messages.h; every key needs all languages.
+
+    The core must not contain any CJK literal: translations live only in the
+    resource dictionaries, and the managed NativeMessages class renders the keys.
+    """
+    header = (ROOT/'src/Core/src/Messages.h').read_text(encoding='utf-8')
+    keys = re.findall(r'L"(Native\w+)"', header)
+    if not keys:
+        raise ValueError('No native message keys found in src/Core/src/Messages.h')
+    result = {lang: {} for lang in LANGUAGES}
+    for key in keys:
+        for lang in LANGUAGES:
+            if key in catalog[lang]:
+                result[lang][key] = catalog[lang][key]
+            else:
+                errors.append(f'NativeMessages/{key}: missing {lang}')
+    for path in source_files(ROOT/'src/Core/src') + source_files(ROOT/'src/Core/include'):
+        for number, line in enumerate(path.read_text(encoding='utf-8-sig').splitlines(), 1):
+            if CJK.search(line):
+                errors.append(f'{path.relative_to(ROOT)}:{number}: native code must emit message keys, not CJK text')
+    for key in ('NativeMessageDetailFormat',):
+        if key not in catalog['en-US']:
+            errors.append(f'NativeMessages/{key}: missing en-US')
+    return result
 
 
 def check_catalog(name, catalog, errors):
@@ -211,8 +265,11 @@ def audit():
     else:
         catalogs['Installer'] = installer
         check_catalog('Installer', installer, errors)
-    catalogs['Hardcoded'], catalogs['StartupFallback'] = hardcoded_resources(inventory)
-    check_catalog('StartupFallback', catalogs['StartupFallback'], errors)
+    catalogs['Hardcoded'] = hardcoded_resources(inventory)
+    catalogs['StartupFallback'] = startup_fallback(catalogs['App'], errors)
+    catalogs['NativeMessages'] = native_messages(catalogs['App'], errors)
+    # Native keys are resolved at runtime by NativeMessages, never by a literal lookup.
+    references['App'].update(catalogs['NativeMessages']['en-US'])
     launcher = (ROOT/'Remove-Selected-iPhone-Drivers.cmd').read_text(encoding='utf-8')
     launcher_bytes = (ROOT/'Remove-Selected-iPhone-Drivers.cmd').read_bytes()
     if launcher_bytes.startswith(b'\xef\xbb\xbf') or b'\n' in launcher_bytes.replace(b'\r\n', b''):
