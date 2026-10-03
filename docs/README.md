@@ -29,6 +29,7 @@
 | UI 入口 | [REVERSE_CONTROL_UI_INVENTORY](REVERSE_CONTROL_UI_INVENTORY.md)：反控入口；[ERROR_DIALOG_CATALOG](ERROR_DIALOG_CATALOG.md)：错误和确认窗口 |
 | 输入焦点 | [KEYBOARD-FOCUS-CONTROL](KEYBOARD-FOCUS-CONTROL.md)：本地文本输入、快捷键与手机键盘路由 |
 | 多设备控屏 | [MULTI_DEVICE_CONTROL](MULTI_DEVICE_CONTROL.md)：连接保留、选项卡与独立窗口焦点、验证范围 |
+| 多语言 | [LOCALIZATION](LOCALIZATION.md)（English）：语言目录、原生消息键、新增语言步骤与校验脚本 |
 
 ## 专项审计与验证记录
 

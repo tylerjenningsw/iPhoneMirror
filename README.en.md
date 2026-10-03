@@ -71,6 +71,10 @@ The [complete user guide (Chinese)](docs/USER_GUIDE.md) covers every main interf
 See the [documentation index](docs/README.md), [development and testing guide](docs/DEVELOPMENT.md),
 and [architecture](docs/ARCHITECTURE.md) for source-level details (Chinese).
 
+The app, driver manager and installer are available in English, Simplified
+Chinese and Traditional Chinese (Hong Kong). [LOCALIZATION.md](docs/LOCALIZATION.md)
+(English) explains how languages are resolved and how to add another one.
+
 The computer needs Apple USB support. If it is missing, the driver manager first
 uses a trusted local `AppleMobileDeviceSupport64.msi`, then downloads the
 standalone MSI from Apple's Software Update catalog, and finally falls back to
