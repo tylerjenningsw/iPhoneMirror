@@ -13,6 +13,7 @@ using IPhoneMirror.App.Interop;
 using IPhoneMirror.App.Services;
 using IPhoneMirror.App.Models;
 using IPhoneMirror.App.Updater;
+using IPhoneMirror.Shared.Localization;
 using IPhoneMirror.Shared.Networking;
 using IPhoneMirror.SharedUI.Services;
 
@@ -524,7 +525,7 @@ var protectedWithAudio = ProtectedContentStatus.Parse(
     ProtectedContentStatus.AudioActiveMarker, 48000, 2);
 Equal(true, protectedWithAudio.IsProtected && protectedWithAudio.AudioActive,
     "protected content marker reports recent audio samples independently");
-Equal(false, ProtectedContentStatus.Parse("投屏中", 48000, 2).IsProtected,
+Equal(false, ProtectedContentStatus.Parse("NativeCaptureStreaming", 48000, 2).IsProtected,
     "ordinary streaming status is not classified as protected content");
 Equal(true, mainViewModelSource.Contains(
         "IsVideoProtected => CurrentDeviceSession?.VideoProtected == true",
@@ -2307,6 +2308,32 @@ Equal(true, StartupDiagnostics.UserMessage(new FileNotFoundException(), false)
 Equal(true, StartupDiagnostics.UserMessage(new DllNotFoundException(), "zh-HK")
     .Contains("原生元件", StringComparison.Ordinal),
     "Hong Kong startup diagnostics use localized native dependency guidance");
+Equal(LanguageCatalog.TraditionalChineseHongKong, LanguageCatalog.ResolveCultureName("zh-Hant-TW"),
+    "Traditional Chinese variants share the Hong Kong dictionary");
+Equal(LanguageCatalog.SimplifiedChinese, LanguageCatalog.ResolveCultureName("zh-SG"),
+    "other Chinese variants use Simplified Chinese");
+Equal(LanguageCatalog.English, LanguageCatalog.ResolveCultureName("en-GB"),
+    "a language subtag matches the shipped dictionary for that language");
+Equal(LanguageCatalog.English, LanguageCatalog.ResolveCultureName("de-DE"),
+    "unsupported languages fall back to English");
+Equal(LanguageCatalog.SystemLanguage, LanguageCatalog.NormalizePreference("fr-FR"),
+    "unknown stored preferences follow the system language");
+Equal(LanguageCatalog.English, LanguageCatalog.NormalizePreference("EN-us"),
+    "stored preferences are matched case-insensitively");
+Equal(LanguageCatalog.SystemLanguage, LanguageCatalog.NormalizePreference(null),
+    "a missing preference follows the system language");
+Equal(true, NativeMessages.TryParse("NativeUsbOpenFailed: LIBUSB_ERROR_ACCESS; retry later",
+        out var nativeKey, out var nativeDetail) &&
+    nativeKey == "NativeUsbOpenFailed" && nativeDetail == "LIBUSB_ERROR_ACCESS; retry later",
+    "native message keys keep their complete technical detail");
+Equal(false, NativeMessages.TryParse("DRM_VIDEO_PROTECTED", out _, out _),
+    "protocol markers are not native message keys");
+Equal("DRM_VIDEO_PROTECTED", NativeMessages.Localize("DRM_VIDEO_PROTECTED"),
+    "protocol markers pass through native message localization unchanged");
+Equal("NativeCoreNotInitialized", NativeMessages.Localize("NativeCoreNotInitialized"),
+    "native message keys stay intact when no dictionary defines them");
+Equal("[set_configuration] could not set config", NativeMessages.Localize("[set_configuration] could not set config"),
+    "raw libusb diagnostics pass through unchanged");
 var bridgeRuntimeTestRoot = Path.Combine(Path.GetTempPath(),
     $"iPhoneMirror-bridge-runtime-{Guid.NewGuid():N}");
 try
