@@ -29,11 +29,19 @@ internal static class LanguagePreference
         {
             if (!File.Exists(path)) return LanguageCatalog.SystemLanguage;
             using var document = JsonDocument.Parse(File.ReadAllText(path));
-            return document.RootElement.ValueKind == JsonValueKind.Object &&
-                document.RootElement.TryGetProperty(PropertyName, out var value) &&
-                value.ValueKind == JsonValueKind.String
-                ? LanguageCatalog.NormalizePreference(value.GetString())
-                : LanguageCatalog.SystemLanguage;
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return LanguageCatalog.SystemLanguage;
+            // The settings store deserializes case-insensitively, so a file that
+            // says "language" must keep working here as well.
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (property.NameEquals(PropertyName) ||
+                    property.Name.Equals(PropertyName, StringComparison.OrdinalIgnoreCase))
+                    return property.Value.ValueKind == JsonValueKind.String
+                        ? LanguageCatalog.NormalizePreference(property.Value.GetString())
+                        : LanguageCatalog.SystemLanguage;
+            }
+            return LanguageCatalog.SystemLanguage;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
         {

@@ -2333,6 +2333,20 @@ Equal(true, NativeMessages.TryParse("NativeUsbOpenFailed: LIBUSB_ERROR_ACCESS; r
     "native message keys keep their complete technical detail");
 Equal(false, NativeMessages.TryParse("DRM_VIDEO_PROTECTED", out _, out _),
     "protocol markers are not native message keys");
+var preferenceFile = Path.Combine(Path.GetTempPath(), $"iPhoneMirror-language-{Guid.NewGuid():N}.json");
+try
+{
+    File.WriteAllText(preferenceFile, "{\"language\":\"zh-HK\"}");
+    Equal(LanguageCatalog.TraditionalChineseHongKong, LanguagePreference.Read(preferenceFile),
+        "stored language preference is read case-insensitively like the settings store");
+    File.WriteAllText(preferenceFile, "{\"Language\":\"en-US\",\"Theme\":\"Dark\"}");
+    Equal(LanguageCatalog.English, LanguagePreference.Read(preferenceFile),
+        "stored language preference is read from the full settings file");
+    File.WriteAllText(preferenceFile, "not json");
+    Equal(LanguageCatalog.SystemLanguage, LanguagePreference.Read(preferenceFile),
+        "a malformed settings file follows the system language");
+}
+finally { File.Delete(preferenceFile); }
 Equal("DRM_VIDEO_PROTECTED", NativeMessages.Localize("DRM_VIDEO_PROTECTED"),
     "protocol markers pass through native message localization unchanged");
 Equal("NativeCoreNotInitialized", NativeMessages.Localize("NativeCoreNotInitialized"),
