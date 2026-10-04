@@ -3357,6 +3357,12 @@ def main() -> int:
         from bridge_runtime_check import check_runtime_functionality
         checks = check_runtime_functionality(
             build_touchscreen_report, TOUCHSCREEN_STATE_CONTACT, TOUCHSCREEN_STATE_RELEASE)
+        # The frozen bridge loads libusb only from its own runtime directory.
+        # Prove the libusb-win32 backend exists at build time instead of at the
+        # user's first reverse-control attempt. No device is opened.
+        from iostouch.qt.usb import get_backend as check_usb_backend
+        check_usb_backend('libusb0' if sys.platform == 'win32' else 'auto')
+        checks.append('usb_backend')
         print(json.dumps({'runtime': 'ready', 'modules': modules, 'functional_checks': checks}))
         return 0
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s',

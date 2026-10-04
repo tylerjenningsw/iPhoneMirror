@@ -26,6 +26,11 @@ All notable changes to iPhoneMirror are documented here. The project follows
 
 ### Fixed
 
+- Bundle `libusb0.dll` inside the USB reverse-control bridge runtime. The
+  frozen bridge only loads libusb from its own runtime directory, so wired
+  reverse control failed at "Preparing device support files" with "no libusb
+  backend available" even though the DLL shipped next to the application.
+  The build now fails if the bridge cannot load its USB backend.
 - Isolate multi-device keyboard writes so a stalled device cannot block another
   device's input. Drop queued touch gestures after focus changes, preserve
   foreground input during inactive-device cleanup, and target Bluetooth startup
