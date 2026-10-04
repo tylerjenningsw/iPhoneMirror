@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """
-USB 直连 iPhone 触控桥接器。
+Direct-USB iPhone touch bridge.
 
-完全独立运行，不需要安装其他控制软件。
-基于开源 pymobiledevice3 + userspace TCP 隧道（无需管理员）。
+Runs completely standalone; no other control software needs to be installed.
+Built on open-source pymobiledevice3 plus a userspace TCP tunnel (no administrator rights).
 
-stdin  : 4 字节 little-endian 长度 + UTF-8 JSON touch_batch
-stdout : JSON-lines 生命周期事件
+stdin  : 4-byte little-endian length + UTF-8 JSON touch_batch
+stdout : JSON-lines lifecycle events
 
-frame 格式:
+frame format:
   {"schema":"iphoneMirror.touch.v2","kind":"touch_batch","seq":N,
    "timestampNs":...,"points":[{"pointerId":1,"action":"down|move|up",
    "normalizedX":0.5,"normalizedY":0.5}, ...]}
 
-诚实行为:
-   - startmediastream 返回 9021 时，验证 Universal HID 后尝试 direct 路径；
-     没有 mainTouchscreen surface 时绝不伪造触控成功。
-  - 任何会话异常立即发 error 事件并退出，触点强制释放。
+Honest behaviour:
+   - when startmediastream returns 9021, verify Universal HID and then try the direct path;
+     never fake a touch success when there is no mainTouchscreen surface.
+  - any session exception emits an error event immediately and exits; touch points are force-released.
 """
 
 from __future__ import annotations
@@ -1210,10 +1210,10 @@ def decode_button_event(message: dict) -> tuple[int, int, int, str]:
 
 
 class FiveSlotStateMachine:
-    """逻辑触点 ID → 固定 slot 0..4，最多 5 点同触。
+    """Logical pointer id -> fixed slot 0..4, at most five simultaneous touches.
 
-    slot 状态字节: release = 0x02 | slot, contact = 0xC2 | slot
-    每点独立 58 字节报告；多点并发时按 slot 顺序逐个发送。
+    slot state byte: release = 0x02 | slot, contact = 0xC2 | slot
+    each point is an independent 58-byte report; concurrent points are sent one by one in slot order.
     """
 
     def __init__(self) -> None:
@@ -1248,7 +1248,7 @@ class FiveSlotStateMachine:
 
 
 def build_touchscreen_report(slot: int, state: int, x: int, y: int, timestamp: Optional[int] = None) -> bytes:
-    """58 字节 mainTouchscreen 报告，slot 状态字节按五点状态机规则。
+    """58-byte mainTouchscreen report; the slot state byte follows the five-slot state machine rules.
 
     slot 0..4: contact = 0xC2 | slot, release = 0x02 | slot
     """
@@ -1327,7 +1327,7 @@ class BridgeChannel:
 
 
 class TouchSession:
-    """USB → CoreDevice 隧道 → RSD → Universal HID 会话。"""
+    """USB -> CoreDevice tunnel -> RSD -> Universal HID session."""
 
     def __init__(self, ipc: BridgeChannel, rate_hz: int, udid: Optional[str] = None,
                  transport: str = 'usb', ddi_dir: Optional[Path] = None) -> None:
@@ -1649,21 +1649,21 @@ class TouchSession:
 
     async def _emit_status(self, code: str) -> None:
         await self.ipc.emit({'event': 'status', 'code': code, 'message': {
-            'connecting_device': f'正在建立{self.transport_mode_name}设备会话',
-            'checking_developer_environment': '正在检查开发者模式和开发者镜像',
-            'mounting_developer_image': '正在准备开发者镜像',
-            'testing_developer_image_sources': '正在检查 GitHub 开发者镜像下载',
-            'downloading_developer_image': '正在下载并校验开发者镜像',
-            'remounting_developer_image': '正在刷新不兼容的开发者镜像',
-            'discovering_wireless_device': '正在通过 RemotePairing 发现无线设备',
-            'capture_mux_ready': '正在通过镜像共存 USB 通道连接设备',
-            'initializing_touch': '正在初始化触控通道',
-            'terminated': 'USB 触控会话已结束',
+            'connecting_device': f'Establishing the {self.transport_mode_name} device session',
+            'checking_developer_environment': 'Checking Developer Mode and the developer disk image',
+            'mounting_developer_image': 'Preparing the developer disk image',
+            'testing_developer_image_sources': 'Checking GitHub developer disk image downloads',
+            'downloading_developer_image': 'Downloading and verifying the developer disk image',
+            'remounting_developer_image': 'Refreshing an incompatible developer disk image',
+            'discovering_wireless_device': 'Discovering the wireless device through RemotePairing',
+            'capture_mux_ready': 'Connecting to the device through the mirroring-compatible USB channel',
+            'initializing_touch': 'Initializing the touch channel',
+            'terminated': 'The USB touch session has ended',
         }.get(code, code)})
 
     @property
     def transport_mode_name(self) -> str:
-        return '无线' if self.transport_mode == 'wireless' else 'USB'
+        return 'wireless' if self.transport_mode == 'wireless' else 'USB'
 
     async def connect(self) -> None:
         await self._emit_status('connecting_device')
@@ -2579,7 +2579,7 @@ class TouchSession:
         })
 
     async def _open_gate(self) -> None:
-        """尝试 startmediastream 持有 backboardd auth gate。
+        """Try startmediastream to hold the backboardd auth gate.
 
         iOS < 27.0 may return 9021.  The caller can fall back to a direct
         Universal HID session when that service is actually available.
@@ -3202,9 +3202,9 @@ class TouchSession:
                 'message': f'stage={stage} error={type(error).__name__}: {str(error)[:160]}'})
 
     async def _cleanup(self, *, preserve_capture_mux: bool = False) -> None:
-        # 强制释放所有触点（异常清理）。失效 HID 可能不响应；不要让
-        # 逐个释放报告阻塞 usbmux 接口的释放，否则下一次控制重连会在
-        # 旧桥仍持有接口时开始 VERSION 握手。
+        # Force-release every touch point (exception cleanup). A dead HID may not respond;
+        # do not let per-point release reports block releasing the usbmux interface, or the
+        # next control reconnect starts its VERSION handshake while the old bridge still holds it.
         async def release_hid_state() -> None:
             if self.hid is None:
                 return
@@ -3329,16 +3329,16 @@ def main() -> int:
     parser.add_argument('--rate-hz', type=int, default=120)
     parser.add_argument('--udid', default=None)
     parser.add_argument('--ddi-dir', type=Path, default=None,
-                        help='仅在未挂载镜像时使用此本地 Personalized DDI 目录')
+                        help='Use this local Personalized DDI directory only when no image is mounted')
     transport = parser.add_mutually_exclusive_group()
     transport.add_argument('--usb', action='store_const', const='usb',
-                           dest='transport', help='仅连接物理 USB 设备（默认）')
+                           dest='transport', help='Connect only to physical USB devices (default)')
     transport.add_argument('--wireless', action='store_const', const='wireless',
-                           dest='transport', help='仅连接已通过 usbmux 配对的无线设备')
+                           dest='transport', help='Connect only to wireless devices already paired through usbmux')
     parser.add_argument('--enable-wifi-sync', action='store_true',
-                        help='通过 USB 为指定设备启用 Apple Wi-Fi 同步')
+                        help='Enable Apple Wi-Fi sync for the given device over USB')
     parser.add_argument('--check-runtime', action='store_true',
-                        help='验证反控运行时依赖，不连接设备')
+                        help='Verify the reverse-control runtime dependencies without connecting to a device')
     parser.set_defaults(transport='usb')
     args = parser.parse_args()
     if args.check_runtime:

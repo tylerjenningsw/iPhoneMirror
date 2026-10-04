@@ -31,6 +31,11 @@ All notable changes to iPhoneMirror are documented here. The project follows
   reverse control failed at "Preparing device support files" with "no libusb
   backend available" even though the DLL shipped next to the application.
   The build now fails if the bridge cannot load its USB backend.
+- The USB reverse-control bridge now reports English diagnostics. Its
+  status and error messages, log lines and `--help` text were Chinese-only,
+  which also crashed `--help` on non-UTF-8 consoles; the app keeps
+  localizing the bridge's status and error codes, and the localization
+  checks now reject CJK text in the bridge sources.
 - Isolate multi-device keyboard writes so a stalled device cannot block another
   device's input. Drop queued touch gestures after focus changes, preserve
   foreground input during inactive-device cleanup, and target Bluetooth startup

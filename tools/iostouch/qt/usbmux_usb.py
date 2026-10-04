@@ -1,16 +1,16 @@
-"""usbmuxd 设备侧协议（TCP-over-USB 复用）的 Python 实现。
+"""Python implementation of the usbmuxd device-side protocol (TCP-over-USB multiplexing).
 
-蓝本：libimobiledevice/usbmuxd ``src/device.c``。线上格式（全部大端）：
+Blueprint: libimobiledevice/usbmuxd ``src/device.c``. Wire format (all big-endian):
 
-* mux 头：``protocol u32 | length u32``；设备版本 ≥ 2 时再加 ``magic 0xfeedface u32 | tx_seq u16 | rx_seq u16``
-* protocol：0 VERSION，1 CONTROL，2 SETUP，6 TCP
-* VERSION 负载：``major u32 | minor u32 | padding u32``
-* TCP 负载：标准 20 字节 TCP 头（sport/dport/seq/ack/off/flags/win/csum/urp）+ 数据；窗口字段为实际值 >> 8
+* mux header: ``protocol u32 | length u32``; device version >= 2 adds ``magic 0xfeedface u32 | tx_seq u16 | rx_seq u16``
+* protocol: 0 VERSION, 1 CONTROL, 2 SETUP, 6 TCP
+* VERSION payload: ``major u32 | minor u32 | padding u32``
+* TCP payload: standard 20-byte TCP header (sport/dport/seq/ack/off/flags/win/csum/urp) + data; the window field is the real value >> 8
 
-流程：主机发 VERSION(2,0)（v1 头）→ 设备回 VERSION → 主机发 SETUP(b"\\x07")（v2 头，tx_seq=0/rx_seq=0xFFFF）
-→ 之后每个连接：SYN → SYN|ACK → ACK；数据包带 ACK 标志；每收到一个数据包回一个 ACK；RST 关闭。
+Flow: host sends VERSION(2,0) (v1 header) -> device replies VERSION -> host sends SETUP(b"\\x07") (v2 header, tx_seq=0/rx_seq=0xFFFF)
+-> then per connection: SYN -> SYN|ACK -> ACK; data packets carry the ACK flag; every received data packet is answered with an ACK; RST closes.
 
-USB 传输规则：一个 mux 包一次 bulk 写；长度是 wMaxPacketSize 整数倍时补一个零长包（ZLP）。
+USB transfer rule: one mux packet per bulk write; when the length is a multiple of wMaxPacketSize, append a zero-length packet (ZLP).
 """
 
 from __future__ import annotations
@@ -35,8 +35,8 @@ TH_RST = 0x04
 TH_PUSH = 0x08
 TH_ACK = 0x10
 
-USB_MTU = 3 * 16384          # 单个 mux 包最大长度（含头）
-DEV_MRU = 65536              # 设备→主机单包上限
+USB_MTU = 3 * 16384          # maximum length of one mux packet (including header)
+DEV_MRU = 65536              # device-to-host single packet limit
 TCP_HDR_LEN = 20
 TX_WINDOW = 131072
 _TCPHDR = struct.Struct("!HHIIBBHHH")
@@ -88,7 +88,7 @@ def parse_tcp(data: bytes) -> TcpSegment:
 
 
 class PacketAssembler:
-    """按 mux 头里的 length 把任意切分的 USB 读块重组成完整 mux 包。"""
+    """Reassemble arbitrarily split USB read chunks into complete mux packets using the length in the mux header."""
 
     def __init__(self) -> None:
         self._buf = bytearray()
@@ -109,7 +109,7 @@ class PacketAssembler:
 
 # --------------------------------------------------------------------------- connection
 class MuxConnection:
-    """一条 TCP-over-USB 连接。收数据进 ``recv``，发数据用 ``send``；线程安全。"""
+    """One TCP-over-USB connection. Received data goes to ``recv``; send with ``send``; thread-safe."""
 
     def __init__(self, mux: "MuxDevice", sport: int, dport: int) -> None:
         self.mux = mux
@@ -126,8 +126,8 @@ class MuxConnection:
         self._cv = threading.Condition()
         self.closed = False
         self.refused = False
-        self.bytes_rx = 0   # 设备→主机 载荷字节
-        self.bytes_tx = 0   # 主机→设备 载荷字节
+        self.bytes_rx = 0   # device-to-host payload bytes
+        self.bytes_tx = 0   # host-to-device payload bytes
         self.close_reason = ""
 
     # ---- called by MuxDevice reader thread
@@ -208,7 +208,7 @@ class MuxConnection:
             off += len(chunk)
 
     def recv(self, max_bytes: int = 65536, timeout: Optional[float] = None) -> bytes:
-        """返回至少 1 字节；连接关闭且无数据时返回 b""。"""
+        """Return at least one byte; return b"" when the connection is closed and no data is pending."""
         with self._cv:
             self._cv.wait_for(lambda: self._inbox or self.closed, timeout)
             if not self._inbox:
@@ -241,7 +241,7 @@ class MuxConnection:
 
 # --------------------------------------------------------------------------- device
 class MuxDevice:
-    """一台设备的 mux 会话。``write`` 由传输层注入（真机是 libusb bulk，测试用假实现）。"""
+    """The mux session of one device. ``write`` is injected by the transport layer (libusb bulk on real hardware, a fake in tests)."""
 
     def __init__(self, write: Callable[[bytes], None], wmax_packet: int = 512, serial: str = "") -> None:
         self._write_raw = write
@@ -251,7 +251,7 @@ class MuxDevice:
         self.tx_seq = 0
         self.rx_seq = 0
         self.ready = threading.Event()
-        self._lock = threading.RLock()  # 收包处理里会再发 ACK/RST，必须可重入
+        self._lock = threading.RLock()  # inbound processing sends ACK/RST again, so it must be re-entrant
         self._conns: dict[int, MuxConnection] = {}
         self._next_sport = 1
         self._failure_reason: Optional[str] = None
@@ -281,10 +281,10 @@ class MuxDevice:
         self._send_packet(PROTO_TCP, build_tcp(conn.sport, conn.dport, conn.tx_seq, conn.tx_ack, flags, conn.tx_win, data))
 
     def start(self) -> None:
-        """发送版本包，开始握手。之后通过 ``feed`` 喂入设备数据。"""
+        """Send the version packet and start the handshake. Afterwards feed device data through ``feed``."""
         self._send_packet(PROTO_VERSION, build_version_payload(2, 0))
 
-    # ---- inbound（由传输层读线程调用）
+    # ---- inbound (called by the transport reader thread)
     def feed(self, chunk: bytes) -> None:
         for pkt in self._assembler.feed(chunk):
             self._handle_packet(pkt)
@@ -314,7 +314,7 @@ class MuxDevice:
                 self.on_control(body)
         elif proto == PROTO_TCP:
             seg = parse_tcp(body)
-            conn = self._conns.get(seg.dport)  # 设备的 dport 就是我们的 sport
+            conn = self._conns.get(seg.dport)  # the device's dport is our sport
             if conn is None or conn.sport != seg.dport or conn.dport != seg.sport:
                 if not seg.flags & TH_RST:
                     self._send_packet(PROTO_TCP, build_tcp(seg.dport, seg.sport, 0, seg.seq, TH_RST, 0))
@@ -371,7 +371,7 @@ class MuxDevice:
 
 # --------------------------------------------------------------------------- libusb transport
 class UsbMuxTransport:
-    """在已激活的隐藏配置上 claim usbmux 接口（子类 0xFE），跑 :class:`MuxDevice`。"""
+    """Claim the usbmux interface (subclass 0xFE) on the active hidden configuration and run :class:`MuxDevice`."""
 
     SUBCLASS_USBMUX = 0xFE
 
