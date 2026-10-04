@@ -14,13 +14,17 @@ internal sealed class KeyboardMappingReleaseTracker
 
     /// <summary>
     /// Returns whether this event must be skipped. <paramref name="mappedNow"/>
-    /// is the filter's current verdict for the key; it is authoritative for a
-    /// press and for a release whose press was never seen.
+    /// is the filter's current verdict for the key; it is authoritative only for
+    /// the first press of a key and for a release whose press was never seen.
+    /// Auto-repeat presses and the release reuse the first press's decision, so
+    /// a key that reached the device is repeated and released there even if the
+    /// modifier state changed while it was held.
     /// </summary>
     public bool ShouldSkip(int virtualKey, bool down, bool mappedNow)
     {
         if (down)
         {
+            if (_pressSkipped.TryGetValue(virtualKey, out var repeated)) return repeated;
             _pressSkipped[virtualKey] = mappedNow;
             return mappedNow;
         }

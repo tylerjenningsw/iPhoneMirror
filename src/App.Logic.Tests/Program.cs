@@ -2405,6 +2405,21 @@ Equal(true, mappingReleases.ShouldSkip(0x41, down: false, mappedNow: false),
     "the release of a swallowed press is swallowed even when a modifier is now held");
 Equal(true, mappingReleases.ShouldSkip(0x42, down: false, mappedNow: true),
     "a release without a tracked press follows the current verdict");
+// Hold Shift+A, release Shift, keep holding A until auto-repeat, release A.
+Equal(false, mappingReleases.ShouldSkip(0x41, down: true, mappedNow: false),
+    "Shift+A press is forwarded");
+Equal(false, mappingReleases.ShouldSkip(0x41, down: true, mappedNow: true),
+    "an auto-repeat after Shift was released stays on the forwarded path");
+Equal(false, mappingReleases.ShouldSkip(0x41, down: true, mappedNow: true),
+    "further repeats keep the first press's decision");
+Equal(false, mappingReleases.ShouldSkip(0x41, down: false, mappedNow: true),
+    "the release after repeats is still forwarded");
+Equal(true, mappingReleases.ShouldSkip(0x41, down: true, mappedNow: true),
+    "the next press is decided afresh");
+Equal(true, mappingReleases.ShouldSkip(0x41, down: true, mappedNow: false),
+    "repeats of a swallowed press stay swallowed when a modifier is pressed mid-hold");
+Equal(true, mappingReleases.ShouldSkip(0x41, down: false, mappedNow: false),
+    "the release of that swallowed press is swallowed");
 mappingReleases.ShouldSkip(0x43, down: true, mappedNow: false);
 mappingReleases.Reset();
 Equal(true, mappingReleases.ShouldSkip(0x43, down: false, mappedNow: true),
