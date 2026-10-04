@@ -2273,6 +2273,10 @@ Equal(true, mainWindowXaml.Contains("OpenShortcutSettingsButton",
          StringComparison.Ordinal) &&
      mainWindowCode.Contains("BluetoothShortcutAction.VolumeDown => BluetoothVolumeDownHotKeyId",
          StringComparison.Ordinal) &&
+     mainWindowCode.Contains("BluetoothShortcutAction.OnScreenKeyboard => BluetoothOnScreenKeyboardHotKeyId",
+         StringComparison.Ordinal) &&
+     mainWindowCode.Contains("CoreDeviceTouchProtocol.IndigoEject, 50)",
+         StringComparison.Ordinal) &&
      mainWindowCode.Contains("BluetoothShortcutAction.LockScreen => BluetoothLockScreenHotKeyId",
          StringComparison.Ordinal) &&
      mainWindowCode.Contains("CoreDeviceTouchProtocol.IndigoLock, 500",
@@ -3166,6 +3170,10 @@ try
     Equal(true, KeyboardShortcut.DefaultFor(BluetoothShortcutAction.AppSwitcher)
         .Equals(KeyboardShortcut.AppSwitcherDefault),
         "Bluetooth app switcher shortcut reset value is the middle mouse button");
+    Equal(true, KeyboardShortcut.DefaultFor(BluetoothShortcutAction.OnScreenKeyboard)
+        .Equals(KeyboardShortcut.Unbound) && !KeyboardShortcut.FromSettings(defaults,
+            BluetoothShortcutAction.OnScreenKeyboard).IsBound,
+        "on-screen keyboard shortcut is unbound by default");
     Equal(true, KeyboardShortcut.DefaultFor(BluetoothShortcutAction.Home)
         .Equals(KeyboardShortcut.HomeDefault),
         "Bluetooth home shortcut reset value is the right mouse button");

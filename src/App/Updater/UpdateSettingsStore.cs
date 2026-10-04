@@ -74,6 +74,8 @@ internal sealed class UpdateSettings
     public int BluetoothBossShortcutModifiers { get; set; } = 0x0003;
     public int BluetoothLockScreenShortcutVirtualKey { get; set; }
     public int BluetoothLockScreenShortcutModifiers { get; set; }
+    public int BluetoothOnScreenKeyboardShortcutVirtualKey { get; set; }
+    public int BluetoothOnScreenKeyboardShortcutModifiers { get; set; }
     public int BluetoothDockShortcutVirtualKey { get; set; }
     public int BluetoothDockShortcutModifiers { get; set; }
     public int BluetoothSearchShortcutVirtualKey { get; set; }
@@ -152,6 +154,8 @@ internal sealed class UpdateSettings
         BluetoothBossShortcutModifiers = BluetoothBossShortcutModifiers,
         BluetoothLockScreenShortcutVirtualKey = BluetoothLockScreenShortcutVirtualKey,
         BluetoothLockScreenShortcutModifiers = BluetoothLockScreenShortcutModifiers,
+        BluetoothOnScreenKeyboardShortcutVirtualKey = BluetoothOnScreenKeyboardShortcutVirtualKey,
+        BluetoothOnScreenKeyboardShortcutModifiers = BluetoothOnScreenKeyboardShortcutModifiers,
         BluetoothDockShortcutVirtualKey = BluetoothDockShortcutVirtualKey,
         BluetoothDockShortcutModifiers = BluetoothDockShortcutModifiers,
         BluetoothSearchShortcutVirtualKey = BluetoothSearchShortcutVirtualKey,
@@ -383,7 +387,9 @@ internal sealed class UpdateSettingsStore
                 !KeyboardShortcut.IsValid(settings.BluetoothDockShortcutModifiers,
                     settings.BluetoothDockShortcutVirtualKey) ||
                 !KeyboardShortcut.IsValid(settings.BluetoothSiriShortcutModifiers,
-                    settings.BluetoothSiriShortcutVirtualKey))
+                    settings.BluetoothSiriShortcutVirtualKey) ||
+                !KeyboardShortcut.IsValid(settings.BluetoothOnScreenKeyboardShortcutModifiers,
+                    settings.BluetoothOnScreenKeyboardShortcutVirtualKey))
             {
                 settings.BluetoothControlCenterShortcutVirtualKey = 0;
                 settings.BluetoothControlCenterShortcutModifiers = 0;
@@ -397,6 +403,8 @@ internal sealed class UpdateSettingsStore
                 settings.BluetoothDockShortcutModifiers = 0;
                 settings.BluetoothSiriShortcutVirtualKey = 0;
                 settings.BluetoothSiriShortcutModifiers = 0;
+                settings.BluetoothOnScreenKeyboardShortcutVirtualKey = 0;
+                settings.BluetoothOnScreenKeyboardShortcutModifiers = 0;
                 settings.BluetoothShortcutSchema = 6;
             }
             var bossKey = KeyboardShortcut.FromSettings(settings, BluetoothShortcutAction.BossKey);

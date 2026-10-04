@@ -7,6 +7,10 @@ All notable changes to iPhoneMirror are documented here. The project follows
 
 ### Added
 
+- Add a "Show or hide the on-screen keyboard" shortcut action. iOS hides its
+  keyboard while the control session's virtual hardware keyboard is attached;
+  the new action sends the Eject key over Bluetooth, wired and wireless
+  control so the keyboard can be toggled without stopping reverse control.
 - Add independent Traditional Chinese (Taiwan) localization across the app,
   driver tools, installer, stream test pages and complete release history.
 ### Changed

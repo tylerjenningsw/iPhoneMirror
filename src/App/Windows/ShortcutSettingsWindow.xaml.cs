@@ -255,6 +255,7 @@ public sealed class ShortcutBindingRow : INotifyPropertyChanged
             BluetoothShortcutAction.VolumeUp => "ShortcutSettingsVolumeUp",
             BluetoothShortcutAction.VolumeDown => "ShortcutSettingsVolumeDown",
             BluetoothShortcutAction.LockScreen => "ShortcutSettingsLockScreen",
+            BluetoothShortcutAction.OnScreenKeyboard => "ShortcutSettingsOnScreenKeyboard",
             _ => "ShortcutSettingsBluetoothControl",
         });
         OnPropertyChanged(nameof(Label));

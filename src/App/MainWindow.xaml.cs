@@ -289,6 +289,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
     private const int BluetoothVolumeUpHotKeyId = 0x4989;
     private const int BluetoothVolumeDownHotKeyId = 0x498A;
     private const int BluetoothLockScreenHotKeyId = 0x498B;
+    private const int BluetoothOnScreenKeyboardHotKeyId = 0x498C;
     private const uint RidInput = 0x10000003;
     private const uint RimTypeMouse = 0;
     private const uint RimTypeKeyboard = 1;
@@ -468,6 +469,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         BluetoothShortcutAction.VolumeUp => BluetoothVolumeUpHotKeyId,
         BluetoothShortcutAction.VolumeDown => BluetoothVolumeDownHotKeyId,
         BluetoothShortcutAction.LockScreen => BluetoothLockScreenHotKeyId,
+        BluetoothShortcutAction.OnScreenKeyboard => BluetoothOnScreenKeyboardHotKeyId,
         _ => 0,
     };
 
@@ -601,6 +603,8 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
             app.UpdateSettings.BluetoothVolumeDownShortcutModifiers = (int)shortcuts[BluetoothShortcutAction.VolumeDown].Modifiers;
             app.UpdateSettings.BluetoothLockScreenShortcutVirtualKey = (int)shortcuts[BluetoothShortcutAction.LockScreen].VirtualKey;
             app.UpdateSettings.BluetoothLockScreenShortcutModifiers = (int)shortcuts[BluetoothShortcutAction.LockScreen].Modifiers;
+            app.UpdateSettings.BluetoothOnScreenKeyboardShortcutVirtualKey = (int)shortcuts[BluetoothShortcutAction.OnScreenKeyboard].VirtualKey;
+            app.UpdateSettings.BluetoothOnScreenKeyboardShortcutModifiers = (int)shortcuts[BluetoothShortcutAction.OnScreenKeyboard].Modifiers;
             app.UpdateSettings.BluetoothShortcutSchema = 6;
             if (!app.SaveUpdateSettings())
             {
@@ -7296,6 +7300,11 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
                 (CoreDeviceTouchProtocol.IndigoConsumerUsagePage,
                  // iOS treats a very short side-button pulse as bounce noise.
                  CoreDeviceTouchProtocol.IndigoLock, 500),
+            // Eject toggles the on-screen keyboard, which iOS hides while the
+            // virtual hardware keyboard of a control session is attached.
+            BluetoothShortcutAction.OnScreenKeyboard =>
+                (CoreDeviceTouchProtocol.IndigoConsumerUsagePage,
+                 CoreDeviceTouchProtocol.IndigoEject, 50),
             _ => null,
         };
 

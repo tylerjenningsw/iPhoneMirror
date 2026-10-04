@@ -327,8 +327,10 @@ peripheral mode. On the first connection, confirm the matching phone in the
 Bluetooth client-binding dialog; bindings are stored per mirrored device and can
 be removed from Settings. The shortcut window configures Bluetooth, wired and
 wireless control, Control Center, Notification Center, App Switcher, Home, Boss
-key, volume, lock-screen, Dock and Siri actions. F12 is reserved; F1-F11 and
-right/middle mouse buttons can be captured directly.
+key, volume, lock-screen, Dock, Siri and on-screen keyboard actions. The
+on-screen keyboard action sends the Eject key, which iOS uses to show or hide
+its keyboard while a hardware keyboard (the control session) is attached. F12
+is reserved; F1-F11 and right/middle mouse buttons can be captured directly.
 Unbound actions stay disabled, duplicate bindings are rejected, and `Backspace`
 or `Delete` clears a binding. The default Bluetooth-control key is `F9` and the
 default Boss key is `Ctrl+Alt+B`.

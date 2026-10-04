@@ -65,5 +65,8 @@ public static class CoreDeviceTouchProtocol
     public const ushort IndigoVolumeDown = 0xEA;
     public const ushort IndigoMute = 0xE2;
     public const ushort IndigoSiri = 0xCF;
+    // Apple keyboards report Eject on the Consumer page; iOS uses it to show
+    // or hide the on-screen keyboard while a hardware keyboard is attached.
+    public const ushort IndigoEject = 0xB8;
     public const ushort GlobeKeyboardLayoutUsage = 0x029D;
 }
