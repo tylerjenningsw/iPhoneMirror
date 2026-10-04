@@ -22,6 +22,7 @@ public partial class MainWindow
     private DispatcherTimer? _mappingTimer;
     private readonly KeyboardMappingCapture _mappingCapture = new();
     private readonly KeyboardMappingWindowsKey _mappingWindowsKey = new();
+    private readonly KeyboardMappingReleaseTracker _mappingReleases = new();
     private bool _systemKeySuppressionRequested;
     private bool _mappingClosing;
     private bool _mappingQueued;
@@ -224,6 +225,12 @@ public partial class MainWindow
         if (processId == Environment.ProcessId) return false; // another device's native preview/menu
         return _mappingFocus?.Allows(foreground) == true;
     }
+
+    // Stateful entry point for device key events: a release always follows the
+    // decision taken for its press, even if the modifier state changed between
+    // the two (Shift+A down, Shift up, A up must still release A on the phone).
+    private bool ShouldSkipMappedDeviceKeyEvent(int virtualKey, string? targetUdid, bool down) =>
+        _mappingReleases.ShouldSkip(virtualKey, down, ShouldSkipMappedDeviceKey(virtualKey, targetUdid));
 
     private bool ShouldSkipMappedDeviceKey(int virtualKey, string? targetUdid) => _mappingSettings.Enabled &&
         Models.DeviceViewModel.UdidEquals(targetUdid, _viewModel.SelectedDevice?.Udid) &&

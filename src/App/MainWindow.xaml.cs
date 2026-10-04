@@ -1430,13 +1430,15 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
             {
                 Interlocked.Increment(ref _keyboardInputGeneration);
                 _ordinaryKeysDown.Clear();
+                _mappingReleases.Reset();
             }
         }
         else if (!CanForwardControlKeyboard(routeUdid, keyboardWindow))
             return;
         if (!isReset && TryHandleConfiguredKey(e.VirtualKey,
                 e.Kind == Controls.PreviewKeyboardKind.Down)) return;
-        if (!isReset && ShouldSkipMappedDeviceKey(e.VirtualKey, routeUdid)) return;
+        if (!isReset && ShouldSkipMappedDeviceKeyEvent(e.VirtualKey, routeUdid,
+                e.Kind == Controls.PreviewKeyboardKind.Down)) return;
         var generation = _keyboardInputGeneration;
         var canSend = isReset ? null : CaptureKeyboardSendGuard(keyboardWindow);
         await _bluetoothRouteGate.WaitAsync();
@@ -6308,6 +6310,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
     {
         Interlocked.Increment(ref _keyboardInputGeneration);
         _ordinaryKeysDown.Clear();
+        _mappingReleases.Reset();
         _controlPointerInitialized = false;
         _lastControlSourceX = 0;
         _lastControlSourceY = 0;

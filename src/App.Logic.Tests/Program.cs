@@ -2392,6 +2392,23 @@ Equal("NativeCoreNotInitialized", NativeMessages.Localize("NativeCoreNotInitiali
     "native message keys stay intact when no dictionary defines them");
 Equal("[set_configuration] could not set config", NativeMessages.Localize("[set_configuration] could not set config"),
     "raw libusb diagnostics pass through unchanged");
+// Shift+A forwards A-down (another modifier is held, so the mapping does not
+// apply); releasing Shift first must not let the mapping swallow A-up.
+var mappingReleases = new KeyboardMappingReleaseTracker();
+Equal(false, mappingReleases.ShouldSkip(0x41, down: true, mappedNow: false),
+    "a device key pressed with another modifier is forwarded");
+Equal(false, mappingReleases.ShouldSkip(0x41, down: false, mappedNow: true),
+    "the release of a forwarded press is forwarded even when the mapping now applies");
+Equal(true, mappingReleases.ShouldSkip(0x41, down: true, mappedNow: true),
+    "a mapped press is swallowed");
+Equal(true, mappingReleases.ShouldSkip(0x41, down: false, mappedNow: false),
+    "the release of a swallowed press is swallowed even when a modifier is now held");
+Equal(true, mappingReleases.ShouldSkip(0x42, down: false, mappedNow: true),
+    "a release without a tracked press follows the current verdict");
+mappingReleases.ShouldSkip(0x43, down: true, mappedNow: false);
+mappingReleases.Reset();
+Equal(true, mappingReleases.ShouldSkip(0x43, down: false, mappedNow: true),
+    "a keyboard reset forgets outstanding presses");
 var bridgeRuntimeTestRoot = Path.Combine(Path.GetTempPath(),
     $"iPhoneMirror-bridge-runtime-{Guid.NewGuid():N}");
 try
