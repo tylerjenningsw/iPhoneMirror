@@ -1,7 +1,7 @@
-"""MuxBridge：在已激活隐藏配置的设备上，用我们自己的 usbmux 通道替代 Apple Mobile Device Service。
+"""MuxBridge: on a device with the hidden configuration active, replace Apple Mobile Device Service with our own usbmux channel.
 
-启动后设置 ``USBMUXD_SOCKET_ADDRESS``，此后本进程内 pymobiledevice3 的全部 usbmux 访问都走这里，
-触摸隧道与 QuickTime 视频得以共存于同一 USB 配置。
+After start-up it sets ``USBMUXD_SOCKET_ADDRESS`` so every pymobiledevice3 usbmux access in this process goes through here,
+letting the touch tunnel and QuickTime video share one USB configuration.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ def addr_file() -> Path:
 
 
 def read_saved_address() -> Optional[str]:
-    """读取上次 MuxBridge 写下的地址（供 ``--usbmux auto``）。"""
+    """Read the address written by the previous MuxBridge (for ``--usbmux auto``)."""
     try:
         return addr_file().read_text(encoding="utf-8").strip() or None
     except OSError:
@@ -33,7 +33,7 @@ def read_saved_address() -> Optional[str]:
 
 
 def free_port_windows(port: int) -> None:
-    """Windows：若端口被本项目遗留的 python 进程占用，结束它。"""
+    """Windows: if the port is held by a leftover python process from this project, terminate it."""
     import subprocess
     import sys
 
@@ -55,10 +55,10 @@ def free_port_windows(port: int) -> None:
         except Exception:  # noqa: BLE001
             info = ""
         if "python" in info.lower():
-            logger.warning("端口 %d 被遗留的 python 进程 %s 占用，结束它", port, pid)
+            logger.warning("port %d is held by leftover python process %s; terminating it", port, pid)
             subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True, timeout=10)
         else:
-            logger.warning("端口 %d 被 PID %s 占用（非 python），不动它：%s", port, pid, info.strip()[:80])
+            logger.warning("port %d is held by PID %s (not python); leaving it alone: %s", port, pid, info.strip()[:80])
 
 
 class MuxBridge:

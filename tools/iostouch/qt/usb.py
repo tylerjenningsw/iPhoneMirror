@@ -1,7 +1,7 @@
-"""pyusb 设备层：发现 iPhone、激活隐藏 QuickTime 配置、claim 0x2A 接口、收发。
+"""pyusb device layer: find the iPhone, activate the hidden QuickTime configuration, claim interface 0x2A, transfer data.
 
-Windows 上必须使用 **libusb-win32 过滤驱动 + libusb0 后端**（与 Apple 驱动共存）；
-libusb-1.0 后端只有在设备被 WinUSB 接管时才可用，但那会破坏 usbmuxd，故不推荐。
+Windows must use the **libusb-win32 filter driver + libusb0 backend** (coexists with the Apple driver);
+the libusb-1.0 backend only works when WinUSB takes over the device, which breaks usbmuxd, so it is not recommended.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ SUBCLASS_QUICKTIME = 0x2A
 
 
 def _is_timeout(exc: BaseException) -> bool:
-    """libusb0 后端的超时是普通 USBError + 'timeout' 文字；libusb1 是 USBTimeoutError 或 errno 110/10060。"""
+    """libusb0 reports a timeout as a plain USBError containing 'timeout'; libusb1 raises USBTimeoutError or errno 110/10060."""
     if isinstance(exc, usb.core.USBTimeoutError):
         return True
     errno = getattr(exc, "errno", None)
@@ -35,7 +35,7 @@ def _is_timeout(exc: BaseException) -> bool:
 
 
 def get_backend(prefer: str = "auto"):
-    """选择 pyusb 后端：Windows 优先 libusb0（libusb-win32），否则 libusb1。"""
+    """Select the pyusb backend: libusb0 (libusb-win32) first on Windows, otherwise libusb1."""
     import usb.backend.libusb0 as b0
     import usb.backend.libusb1 as b1
 
@@ -50,13 +50,13 @@ def get_backend(prefer: str = "auto"):
             logger.info("USB backend: %s", mod.__name__.rsplit(".", 1)[-1])
             return backend
     raise RuntimeError(
-        "没有可用的 libusb 后端。Windows 请安装 libusb-win32 过滤驱动（libusb0.dll 需在 PATH 或程序目录），"
-        "或 pip install libusb 提供 libusb-1.0.dll"
+        "No libusb backend is available. On Windows install the libusb-win32 filter driver "
+        "(libusb0.dll must be on PATH or in the program directory), or pip install libusb to provide libusb-1.0.dll"
     )
 
 
 class StaleConfigError(RuntimeError):
-    """设备停留在隐藏配置且关闭请求无效；调用方可尝试直接探测或硬复位。"""
+    """The device stays in the hidden configuration and the close request has no effect; callers may probe directly or hard-reset."""
 
 
 @dataclass
@@ -65,7 +65,7 @@ class IosUsbDevice:
     serial: str
     mux_config: int
     qt_config: int
-    original_config: int = -1  # 激活前实际生效的配置，停止时恢复
+    original_config: int = -1  # configuration that was active before activation; restored on stop
 
     @property
     def activated(self) -> bool:
@@ -112,7 +112,7 @@ def _serial_of(dev) -> str:
 
 
 def correct_serial(s: str) -> str:
-    """USB 序列号 24 位时缺连字符（应为 8-16 形式的 UDID）。"""
+    """A 24-character USB serial lacks the hyphen (should be an 8-16 form UDID)."""
     if len(s) == 24 and "-" not in s:
         return s[:8] + "-" + s[8:]
     return s
@@ -137,7 +137,7 @@ def find_devices(backend=None, udid: Optional[str] = None) -> list[IosUsbDevice]
 
 
 def send_qt_config_request(dev, enable: bool) -> None:
-    """bmRequestType=0x40 bRequest=0x52 wValue=0 wIndex=2(开)/0(关)"""
+    """bmRequestType=0x40 bRequest=0x52 wValue=0 wIndex=2 (open) / 0 (close)"""
     try:
         rc = dev.ctrl_transfer(0x40, 0x52, 0x00, 0x02 if enable else 0x00, b"", timeout=1000)
         logger.info("QT config control request (%s) sent, rc=%s", "enable" if enable else "disable", rc)
@@ -147,11 +147,11 @@ def send_qt_config_request(dev, enable: bool) -> None:
 
 def _wait_for_device(backend, serial: str, want_activated: bool, retries: int, log=None,
                      resend_every: int = 0) -> Optional[IosUsbDevice]:
-    """轮询等待设备以期望状态出现。``resend_every``>0 时每隔 N 次轮询重发一次激活/关闭请求。"""
+    """Poll until the device appears in the expected state. With ``resend_every`` > 0 the activate/close request is resent every N polls."""
     for i in range(retries):
         time.sleep(0.5)
         if log and i and i % 20 == 0:
-            log(f"[usb] 仍在等待设备{'出现' if want_activated else '关闭'}隐藏配置 ... {i // 2}s（实测有时需要 1 分钟以上）")
+            log(f"[usb] still waiting for the device to {'enter' if want_activated else 'leave'} the hidden configuration ... {i // 2}s (this can take over a minute)")
         if resend_every and i and i % resend_every == 0:
             try:
                 for d in find_devices(backend, serial):
@@ -163,7 +163,7 @@ def _wait_for_device(backend, serial: str, want_activated: bool, retries: int, l
                 logger.debug("resend failed: %s", exc)
         try:
             candidates = find_devices(backend, serial)
-        except Exception as exc:  # noqa: BLE001  重枚举期间设备可能短暂消失
+        except Exception as exc:  # noqa: BLE001  the device may vanish briefly during re-enumeration
             logger.debug("enumerate failed while waiting: %s", exc)
             candidates = []
         for d in candidates:
@@ -174,10 +174,10 @@ def _wait_for_device(backend, serial: str, want_activated: bool, retries: int, l
 
 
 def activate(device: IosUsbDevice, backend=None, retries: int = 40, log=None) -> IosUsbDevice:
-    """激活隐藏配置并保证是**新会话**。
+    """Activate the hidden configuration and guarantee a **fresh session**.
 
-    设备只在刚激活时发起一次 QuickTime 会话（发 PING）；若配置 5 已经存在（上次遗留），
-    连上去设备会一直沉默。所以发现已激活时先发关闭请求让其重枚举，再重新激活。
+    The device starts a QuickTime session (sends PING) only right after activation; if configuration 5 already exists
+    (left over from last time) the device stays silent. So when it is already active, send the close request first to re-enumerate, then activate again.
     """
     backend = backend or get_backend()
     if device.activated:
@@ -198,8 +198,8 @@ def activate(device: IosUsbDevice, backend=None, retries: int = 40, log=None) ->
     d = _wait_for_device(backend, device.serial, want_activated=True, retries=retries, log=log, resend_every=20)
     if d is None:
         raise RuntimeError(
-            f"could not activate QuickTime config for {device.serial}（{retries * 0.5:.0f}s 内未出现隐藏配置）。"
-            "iOS 锁屏时会拒绝屏幕采集：请解锁手机并保持亮屏后重试（可临时把“自动锁定”设为永不）"
+            f"could not activate QuickTime config for {device.serial} (hidden configuration did not appear within {retries * 0.5:.0f}s). "
+            "iOS refuses screen capture while locked: unlock the phone, keep the screen on and retry (temporarily set Auto-Lock to Never if needed)"
         )
     d.original_config = device.original_config
     logger.info("QT config %d activated for %s (was config %d)", d.qt_config, d.serial, d.original_config)
@@ -207,10 +207,10 @@ def activate(device: IosUsbDevice, backend=None, retries: int = 40, log=None) ->
 
 
 def reset_device(device: IosUsbDevice, backend=None, retries: int = 20, log=None, hard: bool = False) -> IosUsbDevice:
-    """让设备退出隐藏配置并重枚举回普通配置。
+    """Make the device leave the hidden configuration and re-enumerate with its normal configuration.
 
-    默认只发关闭控制请求（安全）。``hard=True`` 时再做 USB 端口复位（等价于重新插拔）——
-    实测复位后设备需要更久才能再次激活，调用方应给更长的等待。
+    By default only the close control request is sent (safe). With ``hard=True`` a USB port reset follows (equivalent to replugging);
+    after a reset the device needs noticeably longer before it can be activated again, so callers should wait longer.
     """
     backend = backend or get_backend()
     send_qt_config_request(device.dev, False)
@@ -226,34 +226,34 @@ def reset_device(device: IosUsbDevice, backend=None, retries: int = 20, log=None
         pass
     fresh = _wait_for_device(backend, device.serial, want_activated=False, retries=retries, log=log)
     if fresh is None:
-        raise RuntimeError(f"设备 {device.serial} 关闭隐藏配置后未以普通配置重新出现")
-    time.sleep(1.0)  # 让系统驱动装载完成
+        raise RuntimeError(f"device {device.serial} did not reappear with its normal configuration after closing the hidden one")
+    time.sleep(1.0)  # let the system driver finish loading
     return fresh
 
 
 def wait_for_replug(backend=None, udid: Optional[str] = None, timeout: float = 120.0, log=print) -> IosUsbDevice:
-    """诊断用：提示用户拔掉再插上数据线，插上后立即返回新枚举的设备（未激活状态）。"""
+    """Diagnostics: ask the user to replug the cable and return the newly enumerated (inactive) device as soon as it appears."""
     backend = backend or get_backend()
     present = bool(find_devices(backend, udid))
-    log("[replug] 请拔掉 iPhone 数据线 ..." if present else "[replug] 未检测到设备，请插上数据线 ...")
+    log("[replug] please unplug the iPhone cable ..." if present else "[replug] no device detected, please plug in the cable ...")
     deadline = time.time() + timeout
     if present:
         while time.time() < deadline and find_devices(backend, udid):
             time.sleep(0.3)
-        log("[replug] 已拔出，请重新插上 ...")
+        log("[replug] unplugged, please plug it back in ...")
     while time.time() < deadline:
         devices = find_devices(backend, udid)
         if devices:
             d = devices[0]
-            log(f"[replug] 检测到 {d.serial}（{'已' if d.activated else '未'}激活），立即激活")
+            log(f"[replug] detected {d.serial} ({'active' if d.activated else 'inactive'}); activating now")
             time.sleep(0.5)
             return d
         time.sleep(0.2)
-    raise RuntimeError("等待重新插拔超时")
+    raise RuntimeError("timed out waiting for the device to be replugged")
 
 
 def deactivate(device: IosUsbDevice) -> None:
-    """发送关闭隐藏配置的请求。仅非 Windows 平台再切回原配置（Windows 过滤驱动下切换配置有蓝屏风险）。"""
+    """Send the close-hidden-configuration request. Only non-Windows platforms switch back to the original configuration (switching under the Windows filter driver risks a bluescreen)."""
     send_qt_config_request(device.dev, False)
     if sys.platform == "win32":
         return
@@ -265,13 +265,13 @@ def deactivate(device: IosUsbDevice) -> None:
 
 
 class QuickTimeTransport:
-    """claim 0x2A 接口后的 bulk 收发；``start_reading`` 在线程里循环读，把原始块交给回调。"""
+    """Bulk transfers after claiming interface 0x2A; ``start_reading`` loops in a thread and hands raw chunks to the callback."""
 
     def __init__(self, device: IosUsbDevice, *, read_size: int = 64 * 1024, timeout_ms: int = 1000,
                  deactivate_on_close: bool = True) -> None:
-        # deactivate_on_close：关闭时发送“关闭 QT 配置”控制请求，让设备自行重枚举回普通配置。
-        # 只发控制请求、不调用 set_configuration（后者在 Windows 过滤驱动下曾导致蓝屏）。
-        # 必须关闭：否则下次连接时设备不会再发起新会话。
+        # deactivate_on_close: on close, send the "close QT configuration" control request so the device re-enumerates to its normal configuration by itself.
+        # Only the control request is sent; set_configuration is never called (it caused bluescreens under the Windows filter driver).
+        # Closing is mandatory: otherwise the device will not start a new session on the next connection.
         if not device.activated:
             raise RuntimeError("device not activated for screen mirroring")
         self.device = device
@@ -288,13 +288,13 @@ class QuickTimeTransport:
 
     def open(self) -> None:
         dev = self.dev
-        # 必须通过 libusb 显式 SET_CONFIGURATION：libusb0 过滤驱动只认它自己设置过的配置，
-        # 否则 claim 时报 "invalid configuration 0"（即使设备本身已处于该配置）
+        # SET_CONFIGURATION must be issued explicitly through libusb: the libusb0 filter driver only recognizes configurations it set itself,
+        # otherwise claim fails with "invalid configuration 0" (even if the device is already in that configuration)
         logger.info("set configuration %d", self.device.qt_config)
         try:
             dev.set_configuration(self.device.qt_config)
         except usb.core.USBError as exc:
-            logger.warning("set_configuration(%d) failed: %s（继续尝试 claim）", self.device.qt_config, exc)
+            logger.warning("set_configuration(%d) failed: %s (continuing with claim)", self.device.qt_config, exc)
         try:
             cfg = dev.get_active_configuration()
         except usb.core.USBError:
@@ -314,7 +314,7 @@ class QuickTimeTransport:
             usb.util.claim_interface(dev, intf.bInterfaceNumber)
         except usb.core.USBError as exc:
             if "invalid configuration" in str(exc):
-                logger.warning("claim 失败（%s），强制 set_configuration 后重试", exc)
+                logger.warning("claim failed (%s); forcing set_configuration and retrying", exc)
                 dev.set_configuration(self.device.qt_config)
                 usb.util.claim_interface(dev, intf.bInterfaceNumber)
             else:
@@ -328,7 +328,7 @@ class QuickTimeTransport:
             and usb.util.endpoint_type(e.bmAttributes) == usb.util.ENDPOINT_TYPE_BULK)
         if self._ep_in is None or self._ep_out is None:
             raise RuntimeError("bulk endpoints not found on QuickTime interface")
-        # CLEAR_FEATURE(ENDPOINT_HALT) 两个端点，与 qvh 一致
+        # CLEAR_FEATURE(ENDPOINT_HALT) on both endpoints, matching qvh
         for ep in (self._ep_in, self._ep_out):
             try:
                 dev.ctrl_transfer(0x02, 0x01, 0, ep.bEndpointAddress, b"", timeout=1000)
@@ -350,7 +350,7 @@ class QuickTimeTransport:
                 return
 
     def read_once(self) -> bytes:
-        """读一块数据；超时返回空字节（设备暂无数据是正常现象，不是错误）。"""
+        """Read one chunk; a timeout returns empty bytes (the device having no data is normal, not an error)."""
         try:
             return bytes(self._ep_in.read(self.read_size, timeout=self.timeout_ms))
         except usb.core.USBTimeoutError:
@@ -377,7 +377,7 @@ class QuickTimeTransport:
         self._thread.start()
 
     def close(self) -> None:
-        """保守的拆卸顺序：先让读线程彻底退出（不能有在途 IN 传输），再释放接口，最后释放句柄。"""
+        """Conservative teardown order: let the reader thread exit completely first (no in-flight IN transfers), then release the interface, then the handle."""
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=self.timeout_ms / 1000 + 2)

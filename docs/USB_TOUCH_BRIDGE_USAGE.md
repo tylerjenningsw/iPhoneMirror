@@ -80,8 +80,8 @@ python -c "import asyncio; from pymobiledevice3.usbmux import list_devices; prin
 stdout 每行是一个 JSON 对象。常见事件如下：
 
 ```jsonl
-{"event":"status","code":"connecting_device","message":"正在建立USB设备会话"}
-{"event":"status","code":"initializing_touch","message":"正在初始化触控通道"}
+{"event":"status","code":"connecting_device","message":"Establishing the USB device session"}
+{"event":"status","code":"initializing_touch","message":"Initializing the touch channel"}
 {"event":"ready","protocol":2,"capabilities":["iphoneMirror.usb_touch.v2","iphoneMirror.usb_keyboard.v1"],"udid":"...","rateHz":120,"gateOpen":true,"authMode":"direct","transport":"usb"}
 ```
 

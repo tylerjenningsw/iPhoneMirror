@@ -171,6 +171,15 @@ Get-ChildItem -LiteralPath (Join-Path $Root 'src\Core\src'), (Join-Path $Root 's
             throw "Native code must emit message keys instead of CJK text: $($_.FullName)"
         }
     }
+# The USB reverse-control bridge emits status/error codes that the app
+# localizes; its message text is English diagnostic detail only.
+@(Get-Item -LiteralPath (Join-Path $Root 'tools\usb_touch_bridge.py')) +
+    @(Get-ChildItem -LiteralPath (Join-Path $Root 'tools\iostouch') -Recurse -File -Include *.py) |
+    ForEach-Object {
+        if ($cjk.IsMatch((Get-Content -Raw -LiteralPath $_.FullName -Encoding utf8))) {
+            throw "USB bridge code must emit codes and English diagnostics instead of CJK text: $($_.FullName)"
+        }
+    }
 
 $DriverChinesePath = Join-Path $DriverInstaller 'Localization\Strings.zh-CN.xaml'
 $DriverHongKongPath = Join-Path $DriverInstaller 'Localization\Strings.zh-HK.xaml'

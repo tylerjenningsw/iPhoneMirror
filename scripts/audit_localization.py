@@ -170,6 +170,13 @@ def native_messages(catalog, errors):
         for number, line in enumerate(path.read_text(encoding='utf-8-sig').splitlines(), 1):
             if CJK.search(line):
                 errors.append(f'{path.relative_to(ROOT)}:{number}: native code must emit message keys, not CJK text')
+    # The USB reverse-control bridge is a technical subprocess: the app localizes
+    # its status/error codes, and its message text is English diagnostic detail.
+    # bridge_runtime_check.py deliberately round-trips non-ASCII test data.
+    for path in [ROOT/'tools/usb_touch_bridge.py'] + source_files(ROOT/'tools/iostouch'):
+        for number, line in enumerate(path.read_text(encoding='utf-8-sig').splitlines(), 1):
+            if CJK.search(line):
+                errors.append(f'{path.relative_to(ROOT)}:{number}: bridge code must emit codes and English diagnostics, not CJK text')
     for key in ('NativeMessageDetailFormat',):
         if key not in catalog['en-US']:
             errors.append(f'NativeMessages/{key}: missing en-US')

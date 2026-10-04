@@ -1,11 +1,11 @@
-"""iostouch —— 通过 USB 隧道直接向 iPhone 注入精准触控。
+"""iostouch -- inject precise touches into an iPhone directly over a USB tunnel.
 
-原理：iOS 18 的开发者磁盘映像（DDI）里带有 ``dtuhidd`` 守护进程，它通过 RemoteXPC 暴露
-``com.apple.coredevice.hid.universalhidservice``。向其 ``_ServiceID=257`` 的 mainTouchscreen
-表面发送 58 字节 HID 报告，即可得到与真实手指完全等价的 ``UIEventTypeTouches``。
+How it works: the iOS 18 developer disk image (DDI) ships the ``dtuhidd`` daemon, which exposes
+``com.apple.coredevice.hid.universalhidservice`` over RemoteXPC. Sending 58-byte HID reports to its
+mainTouchscreen surface (``_ServiceID=257``) yields ``UIEventTypeTouches`` identical to a real finger.
 
-前提：设备已信任本机、已开启开发者模式；主机端无需管理员权限（用户态隧道）、无需越狱、
-无需在手机上安装任何 App。
+Prerequisites: the device trusts this computer and Developer Mode is on; the host needs no administrator
+rights (userspace tunnel), no jailbreak, and no app installed on the phone.
 """
 
 __all__ = []

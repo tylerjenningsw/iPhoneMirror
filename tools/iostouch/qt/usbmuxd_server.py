@@ -1,12 +1,12 @@
-"""本地 usbmuxd 兼容服务（主机侧 plist 协议）。
+"""Local usbmuxd-compatible service (host-side plist protocol).
 
-pymobiledevice3 通过环境变量 ``USBMUXD_SOCKET_ADDRESS=127.0.0.1:<port>`` 连到这里，
-所有 lockdown / CoreDevice 隧道流量经 :class:`~iostouch.qt.usbmux_usb.MuxDevice` 走我们自己 claim 的 USB 接口，
-从而与 QuickTime 视频共存于同一 USB 配置。
+pymobiledevice3 connects here through the environment variable ``USBMUXD_SOCKET_ADDRESS=127.0.0.1:<port>``;
+all lockdown / CoreDevice tunnel traffic goes through :class:`~iostouch.qt.usbmux_usb.MuxDevice` over the USB interface we claimed,
+so it coexists with QuickTime video in the same USB configuration.
 
-线上格式（小端）：``length u32 | version u32(1=PLIST) | message u32(8=PLIST) | tag u32 | XML plist``。
-支持的 MessageType：ReadBUID、ListDevices、Listen、ReadPairRecord、SavePairRecord、DeletePairRecord、Connect。
-Connect 返回 Result 0 后，同一 socket 变成与设备端口的裸字节通道。
+Wire format (little-endian): ``length u32 | version u32(1=PLIST) | message u32(8=PLIST) | tag u32 | XML plist``.
+Supported MessageType values: ReadBUID, ListDevices, Listen, ReadPairRecord, SavePairRecord, DeletePairRecord, Connect.
+After Connect returns Result 0 the same socket becomes a raw byte channel to the device port.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ _HDR = struct.Struct("<IIII")
 
 
 def _pair_record_dir() -> Path:
-    """Apple Mobile Device Service 的配对记录目录（Windows：%ALLUSERSPROFILE%\\Apple\\Lockdown）。"""
+    """Pair record directory of Apple Mobile Device Service (Windows: %ALLUSERSPROFILE%\\Apple\\Lockdown)."""
     if os.name == "nt":
         return Path(os.environ.get("ALLUSERSPROFILE", r"C:\ProgramData"), "Apple", "Lockdown")
     return Path("/var/lib/lockdown")
@@ -49,11 +49,11 @@ def _read_system_buid() -> str:
     try:
         return plistlib.loads(p.read_bytes()).get("SystemBUID") or str(uuid.uuid4()).upper()
     except Exception:  # noqa: BLE001
-        return "30142955-444094379208051516"  # pymobiledevice3 的默认 SYSTEM_BUID
+        return "30142955-444094379208051516"  # default SYSTEM_BUID of pymobiledevice3
 
 
 class UsbmuxdServer:
-    """asyncio TCP 服务；``mux`` 为已完成握手的 :class:`MuxDevice`。"""
+    """asyncio TCP service; ``mux`` is a :class:`MuxDevice` whose handshake has completed."""
 
     def __init__(self, mux: MuxDevice, serial: str, *, host: str = "127.0.0.1", port: int = 0,
                  device_id: int = 1, product_id: int = 0x12A8, pair_records: Optional[dict[str, bytes]] = None) -> None:
@@ -77,7 +77,7 @@ class UsbmuxdServer:
         except OSError as exc:
             if self.port == 0:
                 raise
-            logger.warning("端口 %d 被占用（%s），改用系统分配的空闲端口", self.port, exc)
+            logger.warning("port %d is in use (%s); falling back to a system-assigned free port", self.port, exc)
             self._server = await asyncio.start_server(self._handle_client, self.host, 0)
         self.port = self._server.sockets[0].getsockname()[1]
         logger.info("usbmuxd server listening on %s:%d for device %s", self.host, self.port, self.serial)
@@ -212,7 +212,7 @@ class UsbmuxdServer:
     async def _handle_connect(self, tag: int, req: dict, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         device_id = int(req.get("DeviceID", -1))
         port_raw = int(req.get("PortNumber", 0))
-        port = ((port_raw & 0xFF) << 8) | ((port_raw >> 8) & 0xFF)  # 客户端按网络字节序发（htons）
+        port = ((port_raw & 0xFF) << 8) | ((port_raw >> 8) & 0xFF)  # clients send network byte order (htons)
         if device_id != self.device_id:
             writer.write(self._frame(tag, {"MessageType": "Result", "Number": RESULT_BADDEV}))
             await writer.drain()
@@ -299,7 +299,7 @@ class _suppress:
 
 
 class UsbmuxdThread:
-    """在后台线程里跑一个独立事件循环承载 :class:`UsbmuxdServer`，便于同步代码 / Tk 使用。"""
+    """Run an independent event loop on a background thread hosting :class:`UsbmuxdServer`, for synchronous code / Tk use."""
 
     def __init__(self, mux: MuxDevice, serial: str, port: int = 0, **kw) -> None:
         self.server = UsbmuxdServer(mux, serial, port=port, **kw)
