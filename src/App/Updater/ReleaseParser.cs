@@ -22,6 +22,8 @@ internal sealed record ReleaseInfo(
     ReleaseAsset? ChecksumAsset)
 {
     internal Uri ReleaseUrl { get; init; } = new($"https://github.com/RayrenSX/iPhoneMirror/releases/tag/{TagName}");
+    internal string? TaiwanBody { get; init; }
+    internal bool TaiwanNotesChecked { get; init; }
 
     internal ReleaseAsset? PreferredAsset => InstallerAsset ?? ZipAsset;
 
@@ -60,6 +62,7 @@ internal static class ReleaseParser
             var zip = assets
                 .Where(asset => asset.Name.EndsWith(".zip",
                     StringComparison.OrdinalIgnoreCase) &&
+                    !asset.Name.Contains("-UxPlay-", StringComparison.OrdinalIgnoreCase) &&
                     !asset.Name.Contains("source", StringComparison.OrdinalIgnoreCase))
                 .OrderByDescending(ZipScore)
                 .FirstOrDefault();

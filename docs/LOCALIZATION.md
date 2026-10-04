@@ -1,7 +1,8 @@
 # Localization
 
 iPhoneMirror ships in Simplified Chinese (`zh-CN`), Traditional Chinese for
-Hong Kong (`zh-HK`) and English (`en-US`). Every process in the product reads
+Hong Kong (`zh-HK`), Traditional Chinese for Taiwan (`zh-TW`) and English
+(`en-US`). Every process in the product reads
 the same language preference and resolves it through one shared catalog, so a
 language is a set of data files, never a code path. This document describes
 that contract and the exact steps for adding a language.
@@ -31,8 +32,9 @@ placeholders, every native key present in every language, no CJK literals in
    into a supported code or `system`; `ResolvePreference` maps `system` to the
    Windows display language through `ResolveCultureName`.
 3. `ResolveCultureName` maps a BCP-47 name to the closest shipped language:
-   Traditional Chinese variants (`zh-Hant-*`, `zh-TW`, `zh-HK`, `zh-MO`,
-   `zh-CHT`) use `zh-HK`, every other `zh*` uses `zh-CN`, other cultures match
+   `zh-TW` and `zh-Hant-TW` use the Taiwan dictionary, the other Traditional
+   Chinese variants (`zh-Hant-*`, `zh-HK`, `zh-MO`, `zh-CHT`) use `zh-HK`,
+   every other `zh*` uses `zh-CN`, other cultures match
    a shipped code exactly or by language subtag (`en-GB` to `en-US`), and
    anything else falls back to `LanguageCatalog.Fallback`.
 4. `LocalizationService` (app) and `DriverLocalization` (driver manager) load
@@ -68,7 +70,7 @@ To add a native message:
    `Native`.
 2. Emit it with `msg::text(key)`, `msg::text(key, detail)` or
    `msg::append(diagnostic, key, detail)`.
-3. Add the key to all three `src/App/Localization/Strings.*.xaml` files. Use
+3. Add the key to every `src/App/Localization/Strings.*.xaml` file. Use
    `{0}` where the detail belongs inside the sentence.
 
 ## Adding a language
@@ -114,4 +116,5 @@ entry. No translation logic changes.
   open window can re-render it when the user switches language.
 - Hong Kong text follows the terminology already in `Strings.zh-HK.xaml`
   (`裝置`, `驅動程式`, `鏡像`, `擷取`, `記錄`); the verification script rejects
-  mainland terms in that file.
+  mainland terms in that file. Taiwan text is translated independently and
+  follows `Strings.zh-TW.xaml` (`連線`, `傳輸線`, `記錄檔`, `工作階段`, `影格`).

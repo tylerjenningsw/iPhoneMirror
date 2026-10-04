@@ -13,7 +13,7 @@ internal static class DriverCleanupHost
     private const string ScriptFileName = "remove_selected_iphone_drivers.ps1";
     private const string ScriptResourceName = "DriverCleanup.Script.ps1";
     private const string ScriptHash =
-        "A0E627747FBE5CE37EE5D7E65CD57AA843FB3F49157BADD72F839B35840A5BA0";
+        "09F2B297792AE560846AD6E2EDB19D84754B36B7CB262E9365617F439B4AE67F";
 
     internal static bool IsRequested(IReadOnlyList<string> arguments) =>
         arguments.Count >= 1 && string.Equals(arguments[0], Switch,
@@ -33,23 +33,14 @@ internal static class DriverCleanupHost
                     "The driver manager executable could not be protected before elevation."),
                 boundaryError);
 
-        var executable = Environment.ProcessPath ??
-            Process.GetCurrentProcess().MainModule?.FileName ??
-            throw new FileNotFoundException(DriverLocalization.GetOrDefault(
-                "DriverExecutableMissing", "The driver manager executable is missing."));
-        var start = new ProcessStartInfo(executable)
-        {
-            UseShellExecute = true,
-            Verb = "runas",
-            WorkingDirectory = Path.GetDirectoryName(executable)!,
-        };
-        start.ArgumentList.Add(Switch);
+        var arguments = new List<string> { Switch };
         if (parentProcessId is > 0)
         {
-            start.ArgumentList.Add(ParentProcessIdSwitch);
-            start.ArgumentList.Add(parentProcessId.Value.ToString(
+            arguments.Add(ParentProcessIdSwitch);
+            arguments.Add(parentProcessId.Value.ToString(
                 System.Globalization.CultureInfo.InvariantCulture));
         }
+        var start = DriverOperationClient.BuildElevatedStartInfo(arguments);
         using var process = Process.Start(start) ?? throw new InvalidOperationException(
             DriverLocalization.GetOrDefault("DriverCleanupHostStartFailed",
                 "The elevated driver cleanup host did not start."));

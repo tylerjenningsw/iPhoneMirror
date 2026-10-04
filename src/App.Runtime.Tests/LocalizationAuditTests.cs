@@ -45,7 +45,7 @@ internal static class LocalizationAuditTests
         var formats = 0;
         var outcomes = 0;
         ResourceDictionary? previous = null;
-        foreach (var cultureName in new[] { "zh-CN", "zh-HK", "en-US" })
+        foreach (var cultureName in new[] { "zh-CN", "zh-HK", "zh-TW", "en-US" })
         {
             initialize.Invoke(null, [new[] { "--language", cultureName }]);
             if (previous is not null) app.Resources.MergedDictionaries.Remove(previous);
@@ -106,7 +106,7 @@ internal static class LocalizationAuditTests
             }
         }
         app.Shutdown();
-        Console.WriteLine($"Driver localization audit passed: {formats} format cases, 3 dictionary switches, {outcomes} translated outcomes.");
+        Console.WriteLine($"Driver localization audit passed: {formats} format cases, 4 dictionary switches, {outcomes} translated outcomes.");
         return 0;
     }
 
@@ -125,7 +125,7 @@ internal static class LocalizationAuditTests
         var formats = 0;
         var captions = new[] { "DeviceBindingBound", "ShortcutSettingsWirelessControl", "ShortcutSettingsWiredControl" };
         // Switching back to the first language catches stale/replaced dictionary issues.
-        foreach (var cultureName in new[] { "zh-CN", "zh-HK", "en-US", "zh-CN" })
+        foreach (var cultureName in new[] { "zh-CN", "zh-HK", "zh-TW", "en-US", "zh-CN" })
         {
             apply.Invoke(null, [cultureName, false, true]);
             var dictionary = new ResourceDictionary
@@ -150,7 +150,7 @@ internal static class LocalizationAuditTests
             var expected = cultureName switch
             {
                 "zh-CN" => new[] { "未绑定", "无线控制", "有线控制" },
-                "zh-HK" => new[] { "未綁定", "無線控制", "有線控制" },
+                "zh-HK" or "zh-TW" => new[] { "未綁定", "無線控制", "有線控制" },
                 _ => new[] { "Not bound", "Wireless control", "Wired control" },
             };
             for (var i = 0; i < captions.Length; i++)
@@ -180,7 +180,7 @@ internal static class LocalizationAuditTests
         var nativeMessages = AssertNativeMessages(assembly, get);
         var startupCaptions = AssertStartupCaptions(assembly);
         app.Shutdown();
-        Console.WriteLine($"Localization runtime audit passed: {formats} format cases, 4 dictionary switches, 12 control workflows, {nativeMessages} native messages, {startupCaptions} startup captions.");
+        Console.WriteLine($"Localization runtime audit passed: {formats} format cases, 5 dictionary switches, 15 control workflows, {nativeMessages} native messages, {startupCaptions} startup captions.");
         return 0;
     }
 
@@ -195,7 +195,7 @@ internal static class LocalizationAuditTests
         var localize = native.GetMethod("Localize", BindingFlags.NonPublic | BindingFlags.Static)!;
         string Localize(string text) => (string)localize.Invoke(null, [text])!;
         var checks = 0;
-        foreach (var cultureName in new[] { "zh-CN", "zh-HK", "en-US" })
+        foreach (var cultureName in new[] { "zh-CN", "zh-HK", "zh-TW", "en-US" })
         {
             apply.Invoke(null, [cultureName, false, true]);
             var dictionary = new ResourceDictionary
@@ -255,7 +255,7 @@ internal static class LocalizationAuditTests
         var label = diagnostics.GetMethod("Label", BindingFlags.NonPublic | BindingFlags.Static)!;
         var userMessage = diagnostics.GetMethod("UserMessage", BindingFlags.NonPublic | BindingFlags.Static, [typeof(Exception), typeof(string)])!;
         var checks = 0;
-        foreach (var cultureName in new[] { "zh-CN", "zh-HK", "en-US" })
+        foreach (var cultureName in new[] { "zh-CN", "zh-HK", "zh-TW", "en-US" })
         {
             var dictionary = new ResourceDictionary
             {
@@ -274,8 +274,9 @@ internal static class LocalizationAuditTests
             checks += 2;
         }
         // Culture aliases resolve through the shared catalog, not a second mapping.
-        if ((string)label.Invoke(null, ["StartupErrorClose", "zh-Hant-TW"])! != (string)label.Invoke(null, ["StartupErrorClose", "zh-HK"])!)
-            throw new InvalidOperationException("Traditional Chinese alias did not resolve to the Hong Kong dictionary.");
+        if ((string)label.Invoke(null, ["StartupErrorLogLabel", "zh-Hant-TW"])! != (string)label.Invoke(null, ["StartupErrorLogLabel", "zh-TW"])! ||
+            (string)label.Invoke(null, ["StartupErrorLogLabel", "zh-MO"])! != (string)label.Invoke(null, ["StartupErrorLogLabel", "zh-HK"])!)
+            throw new InvalidOperationException("Traditional Chinese aliases did not resolve through the shared catalog.");
         return checks + 1;
     }
 }

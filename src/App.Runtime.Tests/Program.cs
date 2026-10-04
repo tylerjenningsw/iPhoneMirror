@@ -28,6 +28,75 @@ internal static partial class Program
     {
         try
         {
+            if (args is ["--component-audio-formats", var referenceFfmpeg])
+                return RunComponentAudioFormatTests(referenceFfmpeg);
+            if (args is ["--component-runtime"])
+                return RunComponentRuntimeTests();
+            if (args is ["--component-uxplay-lifecycle", var lifecycleOutput])
+                return RunUxPlayLifecycleTests(lifecycleOutput);
+            if (args is ["--component-public-uxplay", var componentPublicOutput])
+            {
+                Environment.SetEnvironmentVariable("IPHONE_MIRROR_APP_LOG_DIRECTORY", Path.GetFullPath(Path.Combine(componentPublicOutput, "logs")));
+                ComponentDownloadNetworkTests.RunPublicComponentAsync(componentPublicOutput).GetAwaiter().GetResult();
+                return 0;
+            }
+            if (args is ["--keyboard-mapping", var mappingOutput])
+                return RunKeyboardMappingTests(mappingOutput);
+            if (args is ["--keyboard-mapping-interaction", var mappingInteractionOutput])
+                return RunKeyboardMappingInteractionTests(mappingInteractionOutput);
+            if (args is ["--keyboard-mapping-lifecycle", var mappingLifecycleOutput])
+                return RunKeyboardMappingInteractionTests(mappingLifecycleOutput, lifecycleOnly: true);
+            if (args is ["--keyboard-mapping-live-probe", var mappingLiveOutput])
+                return RunKeyboardMappingLiveProbe(mappingLiveOutput);
+            if (args is ["--keyboard-mapping-live-interactive", var mappingInteractiveOutput])
+                return RunKeyboardMappingLiveProbe(mappingInteractiveOutput, interactive: true);
+            if (args is ["--keyboard-mapping-live-interactive-wireless", var mappingWirelessInteractiveOutput])
+                return RunKeyboardMappingLiveProbe(mappingWirelessInteractiveOutput, wireless: true, interactive: true);
+            if (args is ["--keyboard-mapping-capture-interactive", var mappingCaptureOutput])
+                return RunKeyboardMappingLiveProbe(mappingCaptureOutput, captureOnly: true);
+            if (args is ["--keyboard-mapping-live-actions", var mappingActionsOutput, var mappingTransport])
+                return RunKeyboardMappingLiveProbe(mappingActionsOutput, true, mappingTransport == "wireless");
+            if (args is ["--component-public-large", var publicLargeOutput])
+            {
+                Environment.SetEnvironmentVariable("IPHONE_MIRROR_APP_LOG_DIRECTORY", Path.GetFullPath(Path.Combine(publicLargeOutput, "logs")));
+                ComponentDownloadNetworkTests.RunPublicAsync(publicLargeOutput, "http://127.0.0.1:7897", mirrors: true, largeOnly: true).GetAwaiter().GetResult();
+                return 0;
+            }
+            if (args is ["--component-network", var archive, var metadata, var networkOutput])
+            {
+                Environment.SetEnvironmentVariable("IPHONE_MIRROR_APP_LOG_DIRECTORY", Path.GetFullPath(Path.Combine(networkOutput, "logs")));
+                ComponentDownloadNetworkTests.RunAsync(archive, metadata, networkOutput).GetAwaiter().GetResult();
+                return 0;
+            }
+            if (args is ["--clipboard-sync"])
+                return RunClipboardSyncRegressionTests();
+            if (args is ["--media-bridge-idle"])
+            {
+                Console.In.ReadToEnd();
+                return 0;
+            }
+            if (args is ["--media-review"])
+            {
+                var mediaApp = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+                typeof(App).GetProperty("IsUiPreviewMode", KeyboardTestMembers)!.SetValue(mediaApp, true);
+                mediaApp.InitializeComponent();
+                try { TestMediaReviewRegressions(); }
+                finally { mediaApp.Shutdown(); }
+                return 0;
+            }
+            if (args is ["--virtual-camera-regression"])
+                return RunVirtualCameraRegressionTests();
+            if (args is ["--updater-elevation-regression"])
+                return RunUpdaterElevationRegressionTests();
+            if (args is ["--capture-review"])
+            {
+                var captureApp = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+                typeof(App).GetProperty("IsUiPreviewMode", KeyboardTestMembers)!.SetValue(captureApp, true);
+                captureApp.InitializeComponent();
+                try { TestCaptureReviewRegressions(); }
+                finally { captureApp.Shutdown(); }
+                return 0;
+            }
             if (args is ["--logic-review"])
             {
                 var reviewApp = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown };
@@ -56,6 +125,8 @@ internal static partial class Program
                 Console.WriteLine("UI theme, window and control runtime regressions passed.");
                 return 0;
             }
+            if (args is ["--component-download-ui", var componentOutput])
+                return RunComponentDownloadTests(componentOutput);
             if (args is ["--interaction-regression"])
                 return RunInteractionRegressionTests();
             if (args is ["--preview-context-menu"])
@@ -64,14 +135,20 @@ internal static partial class Program
                 return RunControlStateAudit(controlOutput);
             if (args is ["--localization-audit"])
                 return LocalizationAuditTests.Run();
+            if (args is ["--taiwan-localization"])
+                return RunTaiwanLocalizationTests();
             if (args is ["--language-display-audit", var displayOutput])
                 return RunLanguageDisplayAudit(displayOutput);
             if (args is ["--language-display-audit", var focusedDisplayOutput, var displaySurface])
                 return RunLanguageDisplayAudit(focusedDisplayOutput, displaySurface);
             if (args is ["--workspace-regression"])
                 return RunWorkspaceRegressionTests();
+            if (args is ["--workspace-performance", var workspacePerformanceOutput])
+                return RunWorkspacePerformanceAudit(workspacePerformanceOutput);
             if (args is ["--keyboard-focus"])
                 return RunKeyboardFocusTests();
+            if (args is ["--shortcuts"])
+                return RunKeyboardFocusTests(shortcutReview: true);
             if (args is ["--preview-pointer"])
                 return RunKeyboardFocusTests(initializeHiddenHandle: true);
             if (args is ["--driver-localization-audit", var localizedDriverAssembly])
@@ -83,17 +160,19 @@ internal static partial class Program
             if (args is ["--ui-audit", var auditOutput])
                 return RunConsistencyAudit(auditOutput);
             if (args is ["--ui-audit", var cultureOutput, "--culture", var auditCulture] &&
-                auditCulture is "zh-CN" or "zh-HK" or "en-US")
+                auditCulture is "zh-CN" or "zh-HK" or "zh-TW" or "en-US")
                 return RunConsistencyAudit(cultureOutput, onlyCulture: auditCulture);
             if (args is ["--ui-audit", var focusedOutput, var focusedSurface])
                 return RunConsistencyAudit(focusedOutput, focusedSurface);
             if (args is ["--ui-audit", var localizedOutput, var localizedSurface, "--culture", var localizedCulture] &&
-                localizedCulture is "zh-CN" or "zh-HK" or "en-US")
+                localizedCulture is "zh-CN" or "zh-HK" or "zh-TW" or "en-US")
                 return RunConsistencyAudit(localizedOutput, localizedSurface, localizedCulture);
             if (args is ["--preview-shell-ui-audit", var previewOutput])
                 return RunPreviewShellAudit(previewOutput);
             if (args is ["--reverse-control-countdown"])
                 return ReverseControlCountdownTests.Run();
+            if (args is ["--control-binding", var bindingOutput])
+                return RunControlBindingTests(bindingOutput);
             if (args is ["--wired-control-live-countdown"])
                 return WiredControlLiveCountdownTest.Run();
             if (args is ["--live-record", .. var recordingArgs])
@@ -239,10 +318,10 @@ internal static partial class Program
         }
 
         AssertStages("Usb",
-            ["CheckingDevice", "CheckingPermissions", "PreparingDeviceSupport",
+            ["CheckingBinding", "CheckingPermissions", "PreparingDeviceSupport",
                 "Connecting", "InitializingServices", "StartingInputRouter"]);
         AssertStages("Wireless",
-            ["CheckingDevice", "CheckingPermissions", "Connecting",
+            ["CheckingBinding", "CheckingPermissions", "Connecting",
                 "InitializingServices", "StartingInputRouter"]);
         AssertStages("Bluetooth",
             ["CheckingBinding", "CheckingBluetooth", "SwitchingBluetoothPeripheral",
@@ -602,15 +681,8 @@ internal static partial class Program
                 throw new InvalidOperationException("FFmpeg probe returned no capabilities.");
             Console.WriteLine($"Encoder: {ReadProperty<string>(capabilities,
                 "PreferredH264Encoder")}");
-            var requestType = RequireType(assembly,
-                "IPhoneMirror.App.Services.MediaOutputRequest");
-            var kindType = RequireType(assembly,
-                "IPhoneMirror.App.Services.MediaOutputKind");
-            var request = Activator.CreateInstance(requestType,
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-                null, new object[] { Enum.Parse(kindType, "Recording"), destination,
-                    width, height, frameRate, bitrateKbps, string.Empty }, null) ??
-                throw new InvalidOperationException("Recording request could not be created.");
+            var request = CreateLiveRecordingRequest(assembly, destination,
+                width, height, frameRate, bitrateKbps);
             await InvokeAsyncResult(RequireMethod(serviceType, "StartAsync",
                 BindingFlags.Instance | BindingFlags.NonPublic).Invoke(service,
                     [sessionHandle, request, capabilities, CancellationToken.None]) ??
@@ -737,6 +809,17 @@ internal static partial class Program
         }
     }
 
+    private static object CreateLiveRecordingRequest(Assembly assembly,
+        string destination, uint width, uint height, int frameRate, int bitrateKbps)
+    {
+        var requestType = RequireType(assembly, "IPhoneMirror.App.Services.MediaOutputRequest");
+        var kindType = RequireType(assembly, "IPhoneMirror.App.Services.MediaOutputKind");
+        return Activator.CreateInstance(requestType, KeyboardTestMembers, null,
+            [Enum.Parse(kindType, "Recording"), destination, width, height,
+                frameRate, bitrateKbps, string.Empty, null], null) ??
+            throw new InvalidOperationException("Recording request could not be created.");
+    }
+
     private static async Task<object?> InvokeAsyncResult(object awaitable)
     {
         if (awaitable is not Task task)
@@ -766,7 +849,7 @@ internal static partial class Program
 
     private static void TestUpdateWindowThemeSwitch()
     {
-        var application = new App();
+        var application = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         typeof(App).GetProperty("IsUiPreviewMode", BindingFlags.Instance | BindingFlags.NonPublic)!
             .SetValue(application, true);
         application.InitializeComponent();
@@ -1055,7 +1138,7 @@ internal static partial class Program
         }
         finally
         {
-            owner.Close();
+            CloseWorkspaceTestWindow(owner);
         }
     }
 
@@ -1102,7 +1185,7 @@ internal static partial class Program
         }
         finally
         {
-            window.Close();
+            CloseWorkspaceTestWindow(window);
         }
     }
 

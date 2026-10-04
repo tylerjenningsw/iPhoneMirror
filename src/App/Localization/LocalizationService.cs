@@ -16,6 +16,7 @@ internal static class LocalizationService
     internal const string SystemLanguage = LanguageCatalog.SystemLanguage;
     internal const string SimplifiedChinese = LanguageCatalog.SimplifiedChinese;
     internal const string TraditionalChineseHongKong = LanguageCatalog.TraditionalChineseHongKong;
+    internal const string TraditionalChineseTaiwan = LanguageCatalog.TraditionalChineseTaiwan;
     internal const string English = LanguageCatalog.English;
 
     private static string _selectedLanguage = SystemLanguage;
@@ -115,11 +116,11 @@ internal static class LocalizationService
 
     private static string LoadLanguage() => LanguagePreference.Read();
 
-    private static void SaveLanguage(string language)
+    private static void SaveLanguage(string language, string? settingsPath = null)
     {
         try
         {
-            new UpdateSettingsStore(LanguagePreference.SettingsPath).Update(settings =>
+            new UpdateSettingsStore(settingsPath ?? LanguagePreference.SettingsPath).Update(settings =>
                 settings.Language = language);
         }
         catch (Exception error)
