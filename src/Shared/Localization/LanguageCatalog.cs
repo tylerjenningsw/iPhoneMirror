@@ -16,6 +16,7 @@ internal static class LanguageCatalog
 
     internal const string SimplifiedChinese = "zh-CN";
     internal const string TraditionalChineseHongKong = "zh-HK";
+    internal const string TraditionalChineseTaiwan = "zh-TW";
     internal const string English = "en-US";
 
     /// <summary>Language used when nothing else matches.</summary>
@@ -27,7 +28,7 @@ internal static class LanguageCatalog
     /// every localized project.
     /// </summary>
     internal static readonly IReadOnlyList<string> Supported =
-        [SimplifiedChinese, TraditionalChineseHongKong, English];
+        [SimplifiedChinese, TraditionalChineseHongKong, TraditionalChineseTaiwan, English];
 
     /// <summary>Relative resource path prefix shared by every project.</summary>
     internal const string DictionaryPrefix = "Localization/Strings.";
@@ -65,15 +66,17 @@ internal static class LanguageCatalog
         ResolveCultureName(CultureInfo.InstalledUICulture.Name);
 
     /// <summary>
-    /// Maps any BCP-47 culture name to the closest shipped language.
-    /// Traditional Chinese variants share the Hong Kong dictionary, every other
-    /// Chinese variant uses Simplified Chinese, other languages match a shipped
-    /// entry by exact code or by language subtag, and the rest fall back to
+    /// Maps any BCP-47 culture name to the closest shipped language. Taiwan
+    /// cultures use the independent Taiwan dictionary, the other Traditional
+    /// Chinese variants share the Hong Kong dictionary, every other Chinese
+    /// variant uses Simplified Chinese, other languages match a shipped entry by
+    /// exact code or by language subtag, and the rest fall back to
     /// <see cref="Fallback"/>.
     /// </summary>
     internal static string ResolveCultureName(string? cultureName)
     {
         if (string.IsNullOrWhiteSpace(cultureName)) return Fallback;
+        if (IsTaiwanTraditionalChinese(cultureName)) return TraditionalChineseTaiwan;
         if (IsTraditionalChinese(cultureName)) return TraditionalChineseHongKong;
         if (cultureName.StartsWith("zh", StringComparison.OrdinalIgnoreCase))
             return SimplifiedChinese;
@@ -96,12 +99,15 @@ internal static class LanguageCatalog
     internal static bool IsDictionarySource(string? source) =>
         source?.Contains(DictionaryPrefix, StringComparison.OrdinalIgnoreCase) == true;
 
+    private static bool IsTaiwanTraditionalChinese(string cultureName) =>
+        cultureName.Equals(TraditionalChineseTaiwan, StringComparison.OrdinalIgnoreCase) ||
+        cultureName.Equals("zh-Hant-TW", StringComparison.OrdinalIgnoreCase);
+
     private static bool IsTraditionalChinese(string cultureName) =>
         cultureName.StartsWith("zh-Hant", StringComparison.OrdinalIgnoreCase) ||
         cultureName.Equals("zh-CHT", StringComparison.OrdinalIgnoreCase) ||
         cultureName.Equals(TraditionalChineseHongKong, StringComparison.OrdinalIgnoreCase) ||
-        cultureName.Equals("zh-MO", StringComparison.OrdinalIgnoreCase) ||
-        cultureName.Equals("zh-TW", StringComparison.OrdinalIgnoreCase);
+        cultureName.Equals("zh-MO", StringComparison.OrdinalIgnoreCase);
 
     private static string LanguageSubtag(string cultureName)
     {

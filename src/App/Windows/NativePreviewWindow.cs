@@ -773,13 +773,22 @@ internal sealed class NativePreviewWindow : IDisposable
                 handled = true;
                 return 0;
             case WmRightButtonDown when IsRightButtonForwardingEnabled:
-                if (IsReverseControlActive)
+                if (IsPointerInputActive)
+                {
+                    _capturedMouseButtons |= 2;
+                    _ = SetCapture(hwnd);
                     DispatchPointer(PreviewPointerKind.ButtonDown, lParam, 2, 0);
+                }
                 handled = true;
                 return 0;
-            case WmRightButtonUp when IsRightButtonForwardingEnabled:
-                if (IsReverseControlActive)
+            case WmRightButtonUp when IsRightButtonForwardingEnabled || (_capturedMouseButtons & 2) != 0:
+                if (IsPointerInputActive)
                     DispatchPointer(PreviewPointerKind.ButtonUp, lParam, 2, 0);
+                if ((_capturedMouseButtons & 2) != 0)
+                {
+                    _capturedMouseButtons = (byte)(_capturedMouseButtons & ~2);
+                    if (_capturedMouseButtons == 0) _ = ReleaseCapture();
+                }
                 handled = true;
                 return 0;
             case WmMiddleButtonDown when IsPointerInputActive:
@@ -1175,7 +1184,8 @@ internal sealed class NativePreviewWindow : IDisposable
     private bool IsUsbControlEnabledForWindow => _pointerInput is not null &&
         (_isUsbControlEnabled?.Invoke() ?? false);
     // The reverse-control callback also includes wired/wireless touch targets.
-    // Only Bluetooth reserves right-click for phone input; touch keeps the menu.
+    // Reserve their right-click for the window menu, even when a phone shortcut
+    // (including the default Home binding) uses it. Only Bluetooth forwards it.
     private bool IsRightButtonForwardingEnabled =>
         IsReverseControlEnabledForWindow && !IsUsbControlEnabledForWindow;
     private bool IsPointerInputEnabledForWindow =>

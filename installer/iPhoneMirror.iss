@@ -72,7 +72,10 @@ WizardStyle=modern
 WizardSizePercent=110
 Compression={#MyCompression}
 SolidCompression={#MySolidCompression}
+; Keep the driver self-contained, but let the solid stream reuse its .NET
+; assemblies across the main application's runtime (roughly 170 MB apart).
 LZMAUseSeparateProcess=yes
+LZMADictionarySize=262144
 LZMANumFastBytes=273
 CloseApplications=yes
 CloseApplicationsFilter=iPhoneMirror.exe,iPhoneMirror.Driver.exe
@@ -85,6 +88,7 @@ ChangesEnvironment=no
 [Languages]
 Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 Name: "chinesetrad"; MessagesFile: "compiler:Languages\ChineseTraditional.isl"
+Name: "chinesetaiwan"; MessagesFile: "Languages\ChineseTraditionalTaiwan.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [LangOptions]
@@ -185,6 +189,7 @@ chinesetrad.WizardUserInfo=使用者資料
 [CustomMessages]
 chinesesimp.DeleteUserDataPrompt=是否同时删除 iPhoneMirror 的用户配置和已下载更新？选择“否”将保留这些数据，以便以后重新安装。
 chinesetrad.DeleteUserDataPrompt=是否同時刪除 iPhoneMirror 的使用者設定和已下載的更新？選擇「否」會保留這些資料，以便日後重新安裝。
+chinesetaiwan.DeleteUserDataPrompt=是否同時刪除 iPhoneMirror 的使用者設定和已下載的更新？選擇「否」會保留這些資料，以便日後重新安裝。
 english.DeleteUserDataPrompt=Also delete iPhoneMirror settings and downloaded updates? Choose No to keep this data for a later reinstall.
 
 [Tasks]
@@ -203,6 +208,11 @@ Source: "{#MySourceDir}\libusb0.dll"; DestDir: "{app}\tools\_internal"; DestName
 ; The bridge is a PyInstaller onedir runtime. Delete its previous contents
 ; before install so an upgrade never combines new code with stale Python DLLs.
 Type: filesandordirs; Name: "{app}\tools\_internal"
+; Driver elevation now uses a self-contained bundle. Remove old sidecars so
+; an upgrade cannot accidentally retain its former runtime configuration.
+Type: files; Name: "{app}\iPhoneMirror.Driver.dll"
+Type: files; Name: "{app}\iPhoneMirror.Driver.deps.json"
+Type: files; Name: "{app}\iPhoneMirror.Driver.runtimeconfig.json"
 Type: files; Name: "{app}\tools\ffmpeg\ffmpeg.exe"
 Type: files; Name: "{app}\tools\ffmpeg\LICENSE.txt"
 Type: files; Name: "{app}\tools\ffmpeg\README.txt"
@@ -216,6 +226,8 @@ Name: "{group}\Changelog"; Filename: "{app}\CHANGELOG.md"; WorkingDir: "{app}"; 
 Name: "{group}\卸载"; Filename: "{uninstallexe}"; IconFilename: "{uninstallexe}"; Languages: chinesesimp
 Name: "{group}\解除安裝"; Filename: "{uninstallexe}"; IconFilename: "{uninstallexe}"; Languages: chinesetrad
 Name: "{group}\Uninstall"; Filename: "{uninstallexe}"; IconFilename: "{uninstallexe}"; Languages: english
+Name: "{group}\更新記錄"; Filename: "{app}\CHANGELOG.zh-TW.md"; WorkingDir: "{app}"; IconFilename: "{app}\iPhoneMirror.exe"; AppUserModelID: "{#MyAppUserModelId}"; Languages: chinesetaiwan
+Name: "{group}\解除安裝"; Filename: "{uninstallexe}"; IconFilename: "{uninstallexe}"; Languages: chinesetaiwan
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\iPhoneMirror.exe"; WorkingDir: "{app}"; IconFilename: "{app}\iPhoneMirror.exe"; AppUserModelID: "{#MyAppUserModelId}"; Tasks: desktopicon
 
 [Registry]
@@ -233,6 +245,8 @@ const
 
 var
   DeleteUserData: Boolean;
+
+#include "DesktopShell.iss"
 
 procedure ConfigureWirelessFirewall();
 var
@@ -368,7 +382,7 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  ResultCode: Integer;
+  DesktopShell: Variant;
 begin
   { A previous per-user installation shadows the all-users shortcut because
     both use the same AppUserModelID. Remove its shortcuts only when the user
@@ -391,7 +405,16 @@ begin
     { Give Restart Manager time to release handles from both application EXEs
       before the updated shared runtime is loaded by a new process. }
     Sleep(1000);
-    Exec(ExpandConstant('{app}\iPhoneMirror.exe'), '', ExpandConstant('{app}'),
-      SW_SHOWNORMAL, ewNoWait, ResultCode);
+    { This installer may already have been started by an elevated updater,
+      so ExecAsOriginalUser would still inherit its administrator token.
+      Ask the interactive desktop shell to launch at the user's normal level. }
+    try
+      DesktopShell := GetInteractiveDesktopShell();
+      DesktopShell.ShellExecute(ExpandConstant('{app}\iPhoneMirror.exe'), '',
+        ExpandConstant('{app}'), 'open', SW_SHOWNORMAL);
+    except
+      Log('Could not restart iPhoneMirror through the desktop shell: ' +
+        GetExceptionMessage);
+    end;
   end;
 end;

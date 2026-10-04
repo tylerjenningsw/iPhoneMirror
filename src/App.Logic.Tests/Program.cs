@@ -26,10 +26,39 @@ if (int.TryParse(Environment.GetEnvironmentVariable(delayedExitEnvironment),
     return;
 }
 
-var diagnosticTestRoot = Path.Combine(Path.GetTempPath(),
-    $"iPhoneMirror-test-logs-{Guid.NewGuid():N}");
+var diagnosticTestRoot = args is ["--component-public-uxplay", var componentPublicOutput]
+    ? Path.GetFullPath(Path.Combine(componentPublicOutput, "logs"))
+    : Path.Combine(Path.GetTempPath(), $"iPhoneMirror-test-logs-{Guid.NewGuid():N}");
 Environment.SetEnvironmentVariable("IPHONE_MIRROR_APP_LOG_DIRECTORY",
     diagnosticTestRoot, EnvironmentVariableTarget.Process);
+
+await UxPlayComponentTests.RunAsync();
+if (args is ["--uxplay-component"]) return;
+if (args is ["--component-public-uxplay", var uxplayPublicOutput])
+{
+    await ComponentDownloadNetworkTests.RunPublicComponentAsync(uxplayPublicOutput);
+    return;
+}
+if (args is ["--component-network", var networkArchive, var networkMetadata, var networkOutput])
+{
+    await ComponentDownloadNetworkTests.RunAsync(networkArchive, networkMetadata, networkOutput);
+    return;
+}
+if (args is ["--component-public-network", var publicOutput, var publicProxy])
+{
+    await ComponentDownloadNetworkTests.RunPublicAsync(publicOutput, publicProxy);
+    return;
+}
+if (args is ["--component-public-mirrors", var mirrorOutput, var mirrorProxy])
+{
+    await ComponentDownloadNetworkTests.RunPublicAsync(mirrorOutput, mirrorProxy, mirrors: true);
+    return;
+}
+if (args is ["--uxplay-package", var componentArchive, var componentDescriptor, var componentCache])
+{
+    await UxPlayComponentTests.RunPackageAsync(componentArchive, componentDescriptor, componentCache);
+    return;
+}
 
 static void Equal<T>(T expected, T actual, string name)
 {
@@ -72,20 +101,8 @@ static async Task ThrowsAsync<TException>(Func<Task> action, string name)
     throw new InvalidOperationException($"{name}: expected {typeof(TException).Name}");
 }
 
-var clipboardSync = new ClipboardSyncState();
-Equal(true, clipboardSync.TryBegin("device text"),
-    "new clipboard text is accepted");
-Equal(false, clipboardSync.TryBegin("device text"),
-    "an in-flight clipboard update is coalesced");
-clipboardSync.Complete("device text", succeeded: false);
-Equal(true, clipboardSync.TryBegin("device text"),
-    "a failed Windows clipboard write allows the same text to retry");
-clipboardSync.Complete("device text", succeeded: true);
-Equal(false, clipboardSync.TryBegin("device text"),
-    "a successfully synchronized clipboard value is deduplicated");
-Equal(true, clipboardSync.TryBegin("new device text"),
-    "a changed device clipboard value is accepted");
-clipboardSync.Complete("new device text", succeeded: true);
+await ClipboardSyncTests.RunAsync();
+if (args is ["--clipboard-sync"]) return;
 
 
 static async Task<(int ExitCode, string Output)> RunWindowsPowerShellAsync(
@@ -165,7 +182,8 @@ foreach (var localizationPath in Directory.GetFiles(
     var expectedNavigationFont = localizationFileName.Contains(
             "zh-CN", StringComparison.OrdinalIgnoreCase)
         ? "Microsoft YaHei UI"
-        : localizationFileName.Contains("zh-HK", StringComparison.OrdinalIgnoreCase)
+        : (localizationFileName.Contains("zh-HK", StringComparison.OrdinalIgnoreCase) ||
+           localizationFileName.Contains("zh-TW", StringComparison.OrdinalIgnoreCase))
             ? "Microsoft JhengHei UI"
             : "Segoe UI";
     Equal(expectedNavigationFont, navigationFont,
@@ -229,9 +247,12 @@ foreach (var localizationPath in Directory.GetFiles(
 Equal(LocalizationService.TraditionalChineseHongKong,
     LocalizationService.ResolveCultureName("zh-HK"),
     "Hong Kong system culture selects the Hong Kong dictionary");
-Equal(LocalizationService.TraditionalChineseHongKong,
+Equal(LocalizationService.TraditionalChineseTaiwan,
     LocalizationService.ResolveCultureName("zh-Hant-TW"),
-    "other Traditional Chinese cultures prefer the Hong Kong dictionary");
+    "Taiwan system cultures select the independent Taiwan dictionary");
+Equal(LocalizationService.TraditionalChineseTaiwan,
+    LocalizationService.ResolveCultureName("zh-TW"),
+    "zh-TW does not fall back to Hong Kong");
 Equal(LocalizationService.TraditionalChineseHongKong,
     LocalizationService.ResolveCultureName("zh-CHT"),
     "legacy Traditional Chinese culture selects the Hong Kong dictionary");
@@ -802,7 +823,10 @@ Equal(true, zipUpdateScript.Contains("Rollback was incomplete", StringComparison
             zipUpdateScript.Contains("$changes", StringComparison.Ordinal) &&
             zipUpdateScript.Contains("$restartLock", StringComparison.Ordinal) &&
             zipUpdateScript.Contains("Start-RestartProcess", StringComparison.Ordinal) &&
-            zipUpdateScript.Contains("Shell.Application", StringComparison.Ordinal) &&
+            zipUpdateScript.Contains("Get-InteractiveDesktopShell", StringComparison.Ordinal) &&
+            zipUpdateScript.Contains("FindWindowSW([ref]$location, [ref]$root",
+                StringComparison.Ordinal) &&
+            zipUpdateScript.Contains("8, [ref]$desktopHandle, 1)", StringComparison.Ordinal) &&
             zipUpdateScript.Contains("New-PrivilegedDirectory $destination",
                 StringComparison.Ordinal) &&
             zipUpdateScript.Contains("Enable-DirectoryInheritance $directory",
@@ -820,13 +844,18 @@ Equal(true, virtualCameraServiceCode.Contains("ElevationPathLock.Acquire(helper,
                 StringComparison.Ordinal) &&
             virtualCameraServiceCode.Contains("GetManifestResourceStream(resourceName)",
                 StringComparison.Ordinal) &&
-            virtualCameraServiceCode.Contains("CommonApplicationData",
+            virtualCameraServiceCode.Contains("[Environment]::SystemDirectory",
                 StringComparison.Ordinal) &&
             virtualCameraServiceCode.Contains("SetAccessRuleProtection($true, $false)",
                 StringComparison.Ordinal) &&
-            virtualCameraServiceCode.Contains("Copy-VerifiedPayload $payload.HelperPath",
+            virtualCameraServiceCode.Contains("$security.SetOwner($administrators)",
                 StringComparison.Ordinal) &&
-            virtualCameraServiceCode.Contains("Start-Process -FilePath $helper",
+            virtualCameraServiceCode.Contains("$start.EnvironmentVariables.Clear()",
+                StringComparison.Ordinal) &&
+            !virtualCameraServiceCode.Contains("ConvertFrom-Json", StringComparison.Ordinal) &&
+            virtualCameraServiceCode.Contains("Copy-VerifiedPayload $helperPath $helperHash $helper",
+                StringComparison.Ordinal) &&
+            virtualCameraServiceCode.Contains("[Diagnostics.Process]::Start($start)",
                 StringComparison.Ordinal) &&
             appProjectCode.Contains("IPhoneMirror.App.Payload.iPhoneMirror.VirtualCamera.Admin.exe",
                 StringComparison.Ordinal) &&
@@ -1493,7 +1522,7 @@ Equal(true,
 Equal(true,
     mainWindowCode.Contains("await _viewModel.SendBluetoothAppSwitcherAsync(target, canSend)",
         StringComparison.Ordinal) &&
-    bluetoothHidCode.Contains("0x0A, 0x9D, 0x02, 0x81, 0x02", StringComparison.Ordinal) &&
+    bluetoothHidCode.Contains("0x19, 0x00, 0x2A, 0xFF, 0x03, 0x81, 0x00", StringComparison.Ordinal) &&
     bluetoothHidCode.Contains("0x85, 0x05", StringComparison.Ordinal) &&
     bluetoothHidCode.Contains("0x0A, 0x24, 0x02, 0x09, 0x40", StringComparison.Ordinal) &&
     bluetoothHidCode.Contains("SendIphoneAppSwitcherAsync", StringComparison.Ordinal) &&
@@ -1575,9 +1604,8 @@ Equal(true,
     mainWindowCode.Contains("workspace_left_panel_auto_opened",
         StringComparison.Ordinal),
     "source auto-open telemetry is emitted only when the panel actually changes");
-Equal(true, mainWindowCode.Contains("AnimateWorkspaceSurface", StringComparison.Ordinal) &&
-            mainWindowCode.Contains("BeginAnimation(WidthProperty", StringComparison.Ordinal),
-    "workspace panels animate layout width so preview resizing stays continuous");
+// Continuous viewport geometry is checked on real WPF windows by
+// WorkspaceRevealTests, rather than requiring a particular animation method name.
 Equal(true,
     mainWindowCode.Contains(
         "SetWorkspaceSurfaceImmediate(LeftPanelHost, visible: false, width: 300)",
@@ -1689,7 +1717,7 @@ Equal(true,
     mainWindowCode.Contains("currentWindowWidth", StringComparison.Ordinal) &&
     mainWindowCode.Contains("CenterColumn.ActualWidth <= 0", StringComparison.Ordinal) &&
     !mainWindowCode.Contains("ActualWidth - CenterPanel.ActualWidth", StringComparison.Ordinal) &&
-    mainWindowCode.Contains("_lightweightWorkspaceSurfaceAnimationActive) return;",
+    mainWindowCode.Contains("_workspaceSurfaceAnimationActive) return;",
         StringComparison.Ordinal) &&
     mainWindowCode.Contains("RequestLightweightWindowFit", StringComparison.Ordinal) &&
     mainWindowCode.Contains("AnimateLightweightWindowForWorkspace", StringComparison.Ordinal) &&
@@ -1711,7 +1739,7 @@ Equal(true,
     mainWindowCode.Contains("PreviewPanel.Width = double.NaN", StringComparison.Ordinal) &&
     !mainWindowCode.Contains("centerInsets", StringComparison.Ordinal) &&
     mainWindowCode.Contains("targetSideWidth", StringComparison.Ordinal) &&
-    mainWindowCode.Contains("_lightweightLeftGapTargetWidth", StringComparison.Ordinal) &&
+    mainWindowCode.Contains("_workspaceLeftGapTargetWidth", StringComparison.Ordinal) &&
     mainWindowCode.Contains("_lightweightCenterTargetWidth", StringComparison.Ordinal) &&
     mainWindowCode.Contains("PreviewPanel.ActualWidth", StringComparison.Ordinal) &&
     mainWindowCode.Contains("targetPreviewWidth", StringComparison.Ordinal) &&
@@ -1733,17 +1761,13 @@ Equal(true,
     mainWindowCode.Contains("Keep the left navigation rail fixed",
         StringComparison.Ordinal) &&
     mainWindowCode.Contains("var anchoredMaximumWindowWidth", StringComparison.Ordinal) &&
-    mainWindowCode.Contains("AnimateWorkspaceGap", StringComparison.Ordinal) &&
-    mainWindowCode.Contains("GridLengthAnimation", StringComparison.Ordinal) &&
-    mainWindowCode.Contains("Duration = new Duration(WorkspaceTransitionDuration)",
-        StringComparison.Ordinal) &&
-    mainWindowCode.Contains("_lightweightWindowLastAppliedProgress",
-        StringComparison.Ordinal) &&
+    // Animation timing, intermediate geometry, reversals and clock cleanup are
+    // exercised by WorkspaceRevealTests in App.Runtime.Tests. Do not require
+    // the obsolete independent gap/width clocks or Rendering-loop implementation.
     mainWindowCode.Contains("LockLightweightCenterWidth", StringComparison.Ordinal) &&
     mainWindowCode.Contains("ReleaseLightweightCenterWidth", StringComparison.Ordinal) &&
     !mainWindowCode.Contains("SizeChanged += OnMainWindowSizeChanged", StringComparison.Ordinal) &&
     mainWindowCode.Contains("AnimateLightweightWindowWidth", StringComparison.Ordinal) &&
-    mainWindowCode.Contains("OnLightweightWindowRendering", StringComparison.Ordinal) &&
     mainWindowCode.Contains("ApplyLightweightWindowAnimationFrame", StringComparison.Ordinal) &&
     mainWindowCode.Contains("SynchronizeLightweightWindowPosition", StringComparison.Ordinal) &&
     mainWindowCode.Contains("DispatcherPriority.Render", StringComparison.Ordinal) &&
@@ -2313,8 +2337,12 @@ Equal(true, StartupDiagnostics.UserMessage(new InvalidOperationException(), "zh-
     "other startup failures use the generic guidance");
 Equal("Close", StartupDiagnostics.Label("StartupErrorClose", "zh-CN"),
     "startup captions fall back to English when the dictionary is unavailable");
-Equal(LanguageCatalog.TraditionalChineseHongKong, LanguageCatalog.ResolveCultureName("zh-Hant-TW"),
-    "Traditional Chinese variants share the Hong Kong dictionary");
+Equal(LanguageCatalog.TraditionalChineseTaiwan, LanguageCatalog.ResolveCultureName("zh-Hant-TW"),
+    "Taiwan cultures select the independent Taiwan dictionary");
+Equal(LanguageCatalog.TraditionalChineseHongKong, LanguageCatalog.ResolveCultureName("zh-Hant-HK"),
+    "other Traditional Chinese variants share the Hong Kong dictionary");
+Equal(LanguageCatalog.TraditionalChineseHongKong, LanguageCatalog.ResolveCultureName("zh-MO"),
+    "Macau selects the Hong Kong dictionary");
 Equal(LanguageCatalog.SimplifiedChinese, LanguageCatalog.ResolveCultureName("zh-SG"),
     "other Chinese variants use Simplified Chinese");
 Equal(LanguageCatalog.English, LanguageCatalog.ResolveCultureName("en-GB"),
@@ -2470,7 +2498,7 @@ Equal(true, CaptureErrorGuidance.IsDeviceSessionClosedWarning(deviceSessionClose
 Equal(false, CaptureErrorGuidance.IsDeviceSessionClosedWarning(
         deviceSessionClosedStatus with { ErrorCode = -2110 }),
     "USB disconnects do not use the phone-side stop warning presentation");
-foreach (var cultureFile in new[] { "Strings.zh-CN.xaml", "Strings.zh-HK.xaml", "Strings.en-US.xaml" })
+foreach (var cultureFile in new[] { "Strings.zh-CN.xaml", "Strings.zh-HK.xaml", "Strings.zh-TW.xaml", "Strings.en-US.xaml" })
 {
     Equal(true, File.ReadAllText(Path.Combine(sourceDirectory, "App", "Localization", cultureFile))
             .Contains("DeviceSessionClosedWarningTitleFormat", StringComparison.Ordinal) &&
@@ -3162,6 +3190,11 @@ Equal(false, controlShortcut.Matches(Key.F8, ModifierKeys.Control),
     "shortcut matching rejects incomplete modifiers");
 Equal(false, KeyboardShortcut.TryCreate(Key.F12, ModifierKeys.None, out _),
     "shortcut rejects F12");
+foreach (var modifiers in new[] { ModifierKeys.Control, ModifierKeys.Alt,
+    ModifierKeys.Shift, ModifierKeys.Control | ModifierKeys.Shift,
+    ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift })
+    Equal(false, KeyboardShortcut.TryCreate(Key.F12, modifiers, out _),
+        $"shortcut capture rejects modified F12 ({modifiers}) like persisted settings");
 Equal(false, KeyboardShortcut.TryCreate(Key.A, ModifierKeys.None, out _),
     "shortcut requires a modifier for regular keys");
 Equal(true, KeyboardShortcut.TryCreate(Key.F9, ModifierKeys.None, out _),
@@ -5388,38 +5421,22 @@ Equal(true, warningSession.Handle is null,
 Equal(false, warningSession.IsStopping,
     "USB restore warning clears the in-flight stop state");
 
-var backgroundReleaseIndex = mainViewModelSource.IndexOf(
-    "await ReleaseFailedSessionLockedAsync(state, status);",
-    StringComparison.Ordinal);
-var backgroundPromptIndex = mainViewModelSource.IndexOf(
-    "errorTitle, errorBody);",
-    backgroundReleaseIndex,
-    StringComparison.Ordinal);
-Equal(true, backgroundReleaseIndex >= 0 && backgroundPromptIndex > backgroundReleaseIndex,
-    "background capture errors release the failed session before showing a modal prompt");
-var selectedReleaseIndex = mainViewModelSource.IndexOf(
-    "await ReleaseFailedSessionLockedAsync(state, status);",
-    backgroundReleaseIndex + 1,
-    StringComparison.Ordinal);
-var selectedPromptIndex = mainViewModelSource.IndexOf(
-    "CaptureStatusNoticeWindow.ShowError(errorTitle, errorBody);",
-    selectedReleaseIndex,
-    StringComparison.Ordinal);
-Equal(true, selectedReleaseIndex >= 0 && selectedPromptIndex > selectedReleaseIndex,
-    "selected capture errors release the failed session before showing a modal prompt");
-var sessionClosedWarningMethodIndex = mainViewModelSource.IndexOf(
-    "private void ShowDeviceSessionClosedWarningThenRelease(",
-    StringComparison.Ordinal);
-var sessionClosedPromptIndex = mainViewModelSource.IndexOf(
-    "CaptureStatusNoticeWindow.ShowStoppedThen(errorTitle, errorBody,",
-    sessionClosedWarningMethodIndex, StringComparison.Ordinal);
-var sessionClosedCleanupIndex = mainViewModelSource.IndexOf(
-    "() => ReleaseFailedSessionLockedAsync(state, status)",
-    sessionClosedPromptIndex, StringComparison.Ordinal);
-Equal(true, sessionClosedWarningMethodIndex >= 0 &&
-    sessionClosedPromptIndex > sessionClosedWarningMethodIndex &&
-    sessionClosedCleanupIndex > sessionClosedPromptIndex,
-    "phone-side stop warnings are displayed before their teardown callback runs");
+var usbRestoreRecovery = new UsbRestoreRecoveryTracker();
+usbRestoreRecovery.MarkRecoveryRequired("iphone-17");
+Equal(true, usbRestoreRecovery.IsBlocked("IPHONE-17"),
+    "USB restore warning blocks immediate restart for the same device");
+Sequence([], usbRestoreRecovery.Observe(["iphone-17"]),
+    "a still-present device does not clear the USB restore block");
+Sequence([], usbRestoreRecovery.Observe([]),
+    "a missing observation only records the required disconnect");
+Sequence(["iphone-17"], usbRestoreRecovery.Observe(["IPHONE-17"]),
+    "a device re-enumeration clears the USB restore block");
+Equal(false, usbRestoreRecovery.IsBlocked("iphone-17"),
+    "re-enumerated device can start again");
+
+// Capture cleanup and modal-notice ordering are exercised by
+// App.Runtime.Tests/CaptureReviewRegressionTests.cs. Source-string ordering
+// cannot verify deferred callbacks or the identity of the session they release.
 
 var currentExecutable = Environment.ProcessPath!;
 Equal(true, SingleInstanceCoordinator.IsSameExecutable(currentExecutable,

@@ -14,6 +14,7 @@ internal static class DriverLocalization
 {
     internal const string Chinese = LanguageCatalog.SimplifiedChinese;
     internal const string TraditionalChineseHongKong = LanguageCatalog.TraditionalChineseHongKong;
+    internal const string TraditionalChineseTaiwan = LanguageCatalog.TraditionalChineseTaiwan;
     internal const string English = LanguageCatalog.English;
 
     internal static string Language { get; private set; } = LanguageCatalog.Fallback;

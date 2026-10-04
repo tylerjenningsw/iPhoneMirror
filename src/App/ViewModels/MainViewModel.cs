@@ -101,6 +101,7 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
     internal event Action<string>? ProjectionSettingsRequested;
     internal event Action? MediaOutputSettingsRequested;
     private readonly NativeCore _core;
+    private readonly Func<NativeSessionHandle, NativeCaptureStatus> _captureStatusReader;
     private readonly IPhoneFilterDriverService _filterDriver = new();
     private readonly DriverManagerLauncher _driverManager = new();
     private readonly WirelessReceiverController _wireless;
@@ -117,6 +118,7 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
     private readonly NativeLogTailReader _logReader = new();
     private readonly CaptureShutdownCoordinator _shutdownCoordinator = new();
     private readonly DeviceSessionManager _sessions;
+    private readonly UsbRestoreRecoveryTracker _usbRestoreRecovery = new();
     private readonly MediaOutputService _mediaOutput;
     private readonly VirtualCameraService _virtualCamera;
     private readonly BluetoothHidMouseService _bluetoothControl = new();
@@ -128,7 +130,7 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
     private bool _wirelessControlEnabled => SelectedControl?.WirelessEnabled ?? false;
     private bool _wirelessControlConnected => SelectedControl?.WirelessConnected ?? false;
     private string? _wirelessControlDeviceUdid => SelectedControl?.WirelessTarget ?? null;
-    private readonly ClipboardSyncState _clipboardSyncState = new();
+    private ClipboardSyncState? _clipboardSyncState;
     private readonly List<ClipboardHistoryEntry> _clipboardHistory = [];
     private const int MaxClipboardHistory = 20;
     private readonly BluetoothControlNoticePolicy _bluetoothNoticePolicy = new();
@@ -424,13 +426,15 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
 
     private bool CanEnableUsbControlFor(DeviceViewModel? device) =>
         !_bluetoothControlStarting && !_bluetoothControlStopping &&
-        device is not null && !device.IsMediaCast && !IsDeviceControlBusy(device.Udid) &&
-        GetUsbControlBinding(device.Udid) is not null;
+        IsControlDeviceAvailable(device) && !IsDeviceControlBusy(device!.Udid);
 
     private bool CanEnableWirelessControlFor(DeviceViewModel? device) =>
         !_bluetoothControlStarting && !_bluetoothControlStopping &&
-        device is not null && !device.IsMediaCast && !IsDeviceControlBusy(device.Udid) &&
-        _identityResolver.Resolve(device).AppleUdid is not null;
+        IsControlDeviceAvailable(device) && !IsDeviceControlBusy(device!.Udid);
+
+    private bool IsControlDeviceAvailable(DeviceViewModel? device) =>
+        !_disposed && device is not null && !string.IsNullOrWhiteSpace(device.Udid) &&
+        !device.IsMediaCast && device.State != ConnectionState.Disconnected && Devices.Contains(device);
 
     // AirPlay supplies the picture, but direct touch always goes through a
     // physically connected and trusted Apple USB device.
@@ -1162,9 +1166,13 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
             _appliedBluetoothMouseReverseVertical = _bluetoothMouseReverseVertical;
         }
         _core = new NativeCore();
+        _captureStatusReader = _core.GetDeviceSessionStatus;
         var wirelessReceiver = new WirelessReceiverService();
         _wireless = new WirelessReceiverController(_core, wirelessReceiver);
         _wireless.Backend = _selectedWirelessReceiverBackend;
+        if (_wireless.Backend == WirelessReceiverBackend.UxPlay &&
+            !_wireless.IsBackendAvailable(WirelessReceiverBackend.UxPlay))
+            _wireless.Backend = WirelessReceiverBackend.Original;
         if (Application.Current is App restoredApp)
         {
             _wireless.ReceiverName = WirelessReceiverConfiguration.SanitizeReceiverName(
@@ -1390,47 +1398,45 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    internal void HandleClipboardTextFromDevice(string? text)
+    private ClipboardSyncState ClipboardSync => _clipboardSyncState ??= new(
+        text => System.Windows.Clipboard.SetDataObject(text, copy: true),
+        GetClipboardSequenceNumber,
+        (device, source) => !_disposed && FindControl(device) is { } control &&
+            (ReferenceEquals(control.WiredBridge, source) ||
+             ReferenceEquals(control.WirelessBridge, source)),
+        (device, text, error) =>
+        {
+            if (error is null) AddToClipboardHistory(text);
+            AddDiagnosticLog(AppLog.Event(error is null
+                    ? "clipboard_synced_to_win" : "clipboard_sync_to_win_failed",
+                ("device", AppLog.Device(device)), ("length", text.Length),
+                ("error", error is null ? null : AppLog.Error(error))));
+        });
+
+    [DllImport("user32.dll")]
+    private static extern uint GetClipboardSequenceNumber();
+
+    // Called by the bridge event handlers after dispatching to the UI thread.
+    internal void HandleClipboardTextFromDevice(string device, UsbTouchBridgeHost bridge, string? text,
+        ClipboardSyncState.SequenceSnapshot snapshot)
     {
-        if (string.IsNullOrEmpty(text)) return;
-        if (!_clipboardSyncState.TryBegin(text)) return;
+        if (_disposed) return;
+        ClipboardSync.Observe(device, bridge, text, snapshot);
+        _ = FlushDeviceClipboardAsync();
+    }
 
-        void Apply()
-        {
-            var succeeded = false;
-            try
-            {
-                System.Windows.Clipboard.SetDataObject(text, copy: false);
-                succeeded = true;
-            }
-            catch (Exception error)
-            {
-                AddDiagnosticLog(AppLog.Event("clipboard_sync_to_win_failed",
-                    ("length", text.Length),
-                    ("error", AppLog.Error(error))));
-            }
-            finally
-            {
-                _clipboardSyncState.Complete(text, succeeded);
-            }
-            if (!succeeded) return;
-            AddToClipboardHistory(text);
-            AddDiagnosticLog(AppLog.Event("clipboard_synced_to_win",
-                ("length", text.Length),
-                ("source", "device")));
-        }
-
+    private async Task FlushDeviceClipboardAsync()
+    {
         var dispatcher = Application.Current?.Dispatcher;
-        if (dispatcher is null)
+        if (_disposed || dispatcher is null || dispatcher.HasShutdownStarted) return;
+        // Enter through the dispatcher even when a selection callback arrived
+        // on its thread without a DispatcherSynchronizationContext. Otherwise
+        // Task.Yield/Delay could resume clipboard writes on a worker thread.
+        try { await dispatcher.InvokeAsync(() => ClipboardSync.FlushAsync()).Task.Unwrap(); }
+        catch (Exception error)
         {
-            _clipboardSyncState.Complete(text, succeeded: false);
-            return;
-        }
-        try { dispatcher.BeginInvoke(Apply); }
-        catch
-        {
-            _clipboardSyncState.Complete(text, succeeded: false);
-            throw;
+            AddDiagnosticLog(AppLog.Event("clipboard_sync_to_win_failed",
+                ("error", AppLog.Error(error))));
         }
     }
 
@@ -1461,6 +1467,11 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
     internal Task SendBluetoothAppSwitcherAsync(
         string? expectedTargetDeviceUdid = null, Func<bool>? canSend = null) =>
         _bluetoothControl.SendIphoneAppSwitcherAsync(expectedTargetDeviceUdid, canSend);
+
+    internal Task SendBluetoothConsumerShortcutAsync(ushort usage, int holdMs,
+        string? expectedTargetDeviceUdid = null, Func<bool>? canSend = null) =>
+        _bluetoothControl.SendIphoneConsumerShortcutAsync(usage, holdMs,
+            expectedTargetDeviceUdid, canSend);
 
     internal Task ReleaseBluetoothControlInputAsync() =>
         _bluetoothControl.ReleaseAllAsync();
@@ -1728,7 +1739,7 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
     private string? GetBluetoothControlBinding(string udid)
     {
         var device = Devices.FirstOrDefault(candidate => DeviceViewModel.UdidEquals(candidate.Udid, udid));
-        return _identityResolver.ResolveProfile(device).Profile?.BluetoothIdentity?.StableId;
+        return _identityResolver.ResolveControlBinding(device, ReverseControlMode.Bluetooth)?.TargetStableId;
     }
 
     private bool SaveBluetoothControlBinding(string udid, string clientId)
@@ -2063,12 +2074,10 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
         if (bridge is null ||
             !CoreDeviceTouchProtocol.IsNormalizedCoordinate(normalizedX) ||
             !CoreDeviceTouchProtocol.IsNormalizedCoordinate(normalizedY)) return;
-        var point = new TouchPoint(1, action, normalizedX, normalizedY);
         try
         {
-            await bridge.SendTouchBatchAsync([point],
-                DateTimeOffset.UtcNow.ToUnixTimeNanoseconds(),
-                Interlocked.Increment(ref _usbTouchSequence), cancellationToken, canSend);
+            await SendRoutedTouchAsync(bridge, action, normalizedX, normalizedY, 1,
+                cancellationToken, canSend);
         }
         catch (InvalidOperationException) when (!bridge.IsReady)
         {
@@ -2133,13 +2142,15 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
 
     private async Task EnableWirelessControlCoreAsync(DeviceControlSession control, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_disposed || control.Stopping) return;
         var device = Devices.FirstOrDefault(d => DeviceViewModel.UdidEquals(d.Udid, control.DeviceUdid));
-        control.ControlStatus.Report(ControlStatusMode.Wireless, ControlStage.CheckingDevice, device?.Name ?? "iPhone", LocalizationService.Get("ControlCheckingDeviceBinding"));
-        var boundUdid = control.AppleUdid;
-        if (device is null || string.IsNullOrWhiteSpace(boundUdid) || device.IsMediaCast)
-        { control.ControlStatus.Failed(ControlStatusMode.Wireless, device?.Name ?? "iPhone", LocalizationService.Get("ControlWirelessStartFailed"), LocalizationService.Get("ControlDeviceNotReady")); return; }
-            if (!await ConfirmReverseControlPrerequisitesAsync(control, wireless: true, cancellationToken))
+        if (!ValidateControlBinding(control, device, ControlStatusMode.Wireless)) return;
+        var boundUdid = control.AppleUdid!;
+        if (!await ConfirmReverseControlPrerequisitesAsync(control, wireless: true, cancellationToken))
         { control.ControlStatus.Cancelled(ControlStatusMode.Wireless, device.Name, LocalizationService.Get("ControlWirelessCancelled"), LocalizationService.Get("ControlPrerequisiteCancelled")); return; }
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!ValidateControlBinding(control, device, ControlStatusMode.Wireless)) return;
         control.Starting = true;
         control.WirelessStartupTerminated = false;
         control.ControlStatus.Report(ControlStatusMode.Wireless, ControlStage.CheckingPermissions, device.Name, LocalizationService.Get("ControlCheckingDevicePermissions"));
@@ -2162,9 +2173,10 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
             // path on the optional system Bonjour service or launch repair UI.
             await _lockdownHandshakeGate.WaitAsync(cancellationToken);
             lockdownGateHeld = true;
+            EnsureControlBindingCurrent(control, device, ControlStatusMode.Wireless, cancellationToken);
             await bridge.StartAsync(UsbTouchTransport.Wireless, boundUdid, bridgePath,
                 cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
+            EnsureControlBindingCurrent(control, device, ControlStatusMode.Wireless, cancellationToken);
             if (!bridge.IsReady || control.WirelessStartupTerminated ||
                 !DeviceViewModel.UdidEquals(_identityResolver.Resolve(device).AppleUdid, boundUdid))
                 throw new InvalidOperationException(LocalizationService.Get("ControlWirelessStartupDisconnected"));
@@ -2213,17 +2225,19 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
 
     private void AttachWirelessBridgeEvents(DeviceControlSession control, UsbTouchBridgeHost bridge, DeviceViewModel device)
     {
+        var clipboardSync = ClipboardSync;
         bridge.StatusChanged += (_, bridgeEvent) =>
         {
             var dispatcher = Application.Current?.Dispatcher;
             if (dispatcher is null || dispatcher.HasShutdownStarted) return;
+            var clipboardSequence = bridgeEvent.EventName == "clipboard_text"
+                ? clipboardSync.CaptureSequence() : null;
             dispatcher.BeginInvoke(new Action(() =>
             {
                 if (!ReferenceEquals(control.WirelessBridge, bridge) || _disposed) return;
                 if (bridgeEvent.EventName == "clipboard_text")
                 {
-                    if (!DeviceViewModel.UdidEquals(_clipboardInputDeviceUdid, control.DeviceUdid)) return;
-                    HandleClipboardTextFromDevice(bridgeEvent.Text);
+                    HandleClipboardTextFromDevice(control.DeviceUdid, bridge, bridgeEvent.Text, clipboardSequence!);
                     return;
                 }
                 LogBridgeEvent("wireless", bridgeEvent);
@@ -2258,7 +2272,7 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
         if (_disposed || !control.WirelessEnabled || control.Stopping) return;
         var deviceUdid = control.WirelessTarget;
         var device = Devices.FirstOrDefault(d => DeviceViewModel.UdidEquals(d.Udid, deviceUdid));
-        var appleUdid = device is null ? null : _identityResolver.Resolve(device).AppleUdid;
+        var appleUdid = control.AppleUdid;
         var oldBridge = control.WirelessBridge;
         control.WirelessBridge = null;
         control.WirelessConnected = false;
@@ -2272,7 +2286,7 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
                     ("error", AppLog.Error(error)));
             }
         }
-        if (device is null || string.IsNullOrWhiteSpace(appleUdid))
+        if (!ValidateControlBinding(control, device, ControlStatusMode.Wireless) || string.IsNullOrWhiteSpace(appleUdid))
         {
             control.WirelessEnabled = false;
             control.WirelessTarget = null;
@@ -2290,9 +2304,7 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
                 device.Name, LocalizationService.Format("ControlWirelessRetryFormat", attempt),
                 retryAttempt: attempt, retryLimit: 3);
             await Task.Delay(attempt * 1000, cancellationToken);
-            if (!Devices.Contains(device) ||
-                !DeviceViewModel.UdidEquals(
-                    _identityResolver.Resolve(device).AppleUdid, appleUdid))
+            if (!ValidateControlBinding(control, device, ControlStatusMode.Wireless))
             {
                 control.WirelessEnabled = false;
                 control.WirelessTarget = null;
@@ -2308,10 +2320,11 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
             {
                 await _lockdownHandshakeGate.WaitAsync(cancellationToken);
                 lockdownGateHeld = true;
+                EnsureControlBindingCurrent(control, device, ControlStatusMode.Wireless, cancellationToken);
                 var bridgePath = Path.Combine(AppContext.BaseDirectory, "tools", "iUsbBridge.exe");
                 await bridge.StartAsync(UsbTouchTransport.Wireless, appleUdid,
                     bridgePath, cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
+                EnsureControlBindingCurrent(control, device, ControlStatusMode.Wireless, cancellationToken);
                 if (!bridge.IsReady || !ReferenceEquals(control.WirelessBridge, bridge) ||
                     control.Stopping || !control.WirelessEnabled)
                     throw new InvalidOperationException(LocalizationService.Get("ControlWirelessRecoveryDisconnected"));
@@ -2338,7 +2351,7 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
                     "apple_device_not_trusted" or "wireless_remote_pairing_required" or
                     "device_identity_mismatch" or "developer_image_bundle_invalid" or
                     "developer_image_download_incompatible";
-                if (attempt == 3 || prerequisiteFailure)
+                if (attempt == 3 || prerequisiteFailure || !IsControlBindingCurrent(control, device, ControlStatusMode.Wireless))
                 {
                     control.WirelessEnabled = false;
                     control.WirelessTarget = null;
@@ -2406,18 +2419,15 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
 
     private async Task EnableUsbControlCoreAsync(DeviceControlSession control, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (_disposed || control.Stopping) return;
         var device = Devices.FirstOrDefault(d => DeviceViewModel.UdidEquals(d.Udid, control.DeviceUdid));
-        control.ControlStatus.Report(ControlStatusMode.Usb, ControlStage.CheckingDevice, device?.Name ?? "iPhone", LocalizationService.Get("ControlCheckingDeviceBinding"));
-        if (device is null || device.IsMediaCast || GetUsbControlBinding(device.Udid) is null)
-        { control.ControlStatus.Failed(ControlStatusMode.Usb, device?.Name ?? "iPhone", LocalizationService.Get("ControlWiredStartFailed"), LocalizationService.Get("ControlDeviceNotReady")); return; }
+        if (!ValidateControlBinding(control, device, ControlStatusMode.Usb)) return;
         if (!await ConfirmReverseControlPrerequisitesAsync(control, wireless: false, cancellationToken))
         { control.ControlStatus.Cancelled(ControlStatusMode.Usb, device?.Name ?? "iPhone", LocalizationService.Get("ControlWiredCancelled"), LocalizationService.Get("ControlPrerequisiteCancelled")); return; }
-        if (device is null) return;
-        var boundUsbUdid = control.AppleUdid;
-        if (string.IsNullOrWhiteSpace(boundUsbUdid) ||
-            !DeviceViewModel.UdidEquals(GetUsbControlBinding(device.Udid), boundUsbUdid))
-        { control.ControlStatus.Failed(ControlStatusMode.Usb, device.Name, LocalizationService.Get("ControlWiredStartFailed"), LocalizationService.Get("ControlBindingNotFound")); return; }
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!ValidateControlBinding(control, device, ControlStatusMode.Usb)) return;
+        var boundUsbUdid = control.AppleUdid!;
         control.Starting = true;
         control.ControlStatus.Report(ControlStatusMode.Usb, ControlStage.CheckingPermissions, device.Name, LocalizationService.Get("ControlCheckingDevicePermissions"));
         control.Failed = false;
@@ -2439,9 +2449,10 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
             // device. Never let the bridge choose the first connected phone.
             await _lockdownHandshakeGate.WaitAsync(cancellationToken);
             lockdownGateHeld = true;
+            EnsureControlBindingCurrent(control, device, ControlStatusMode.Usb, cancellationToken);
             await bridge.StartAsync(UsbTouchTransport.Usb, boundUsbUdid, bridgePath,
                 cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
+            EnsureControlBindingCurrent(control, device, ControlStatusMode.Usb, cancellationToken);
             if (!bridge.IsReady || !ReferenceEquals(control.WiredBridge, bridge) ||
                 !DeviceViewModel.UdidEquals(GetUsbControlBinding(device.Udid), boundUsbUdid))
                 throw new InvalidOperationException(LocalizationService.Get("ReverseControlUsbBindingChanged"));
@@ -2539,18 +2550,20 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
     private void AttachUsbBridgeEvents(DeviceControlSession control, UsbTouchBridgeHost bridge,
         DeviceViewModel device, CancellationToken cancellationToken)
     {
+        var clipboardSync = ClipboardSync;
         bridge.StatusChanged += (_, bridgeEvent) =>
         {
             var dispatcher = Application.Current?.Dispatcher;
             if (dispatcher is null || dispatcher.HasShutdownStarted) return;
+            var clipboardSequence = bridgeEvent.EventName == "clipboard_text"
+                ? clipboardSync.CaptureSequence() : null;
             dispatcher.BeginInvoke(new Action(() =>
             {
                 if (!ReferenceEquals(control.WiredBridge, bridge) || _disposed ||
                     cancellationToken.IsCancellationRequested) return;
                 if (bridgeEvent.EventName == "clipboard_text")
                 {
-                    if (!DeviceViewModel.UdidEquals(_clipboardInputDeviceUdid, control.DeviceUdid)) return;
-                    HandleClipboardTextFromDevice(bridgeEvent.Text);
+                    HandleClipboardTextFromDevice(control.DeviceUdid, bridge, bridgeEvent.Text, clipboardSequence!);
                     return;
                 }
                 LogBridgeEvent("usb", bridgeEvent);
@@ -2574,7 +2587,8 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
                 if (bridgeEvent.EventName == "ready" && control.WiredEnabled &&
                     !control.WiredConnected && !control.Stopping && bridge.IsReady)
                 {
-                    if (!DeviceViewModel.UdidEquals(GetUsbControlBinding(device.Udid), bridge.Udid))
+                    if (!IsControlBindingCurrent(control, device, ControlStatusMode.Usb) ||
+                        !DeviceViewModel.UdidEquals(control.AppleUdid, bridge.Udid))
                     {
                         _ = DisableUsbControlAsync(control);
                         return;
@@ -2637,6 +2651,9 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
     private static string GetUsbControlFailureMessage(Exception error,
         UsbTouchBridgeHost bridge, bool wireless = false)
     {
+        // Binding failures raised after an await retain the same actionable
+        // guidance as the initial check, rather than a generic bridge error.
+        if (error is ControlBindingException) return error.Message;
         var raw = string.IsNullOrWhiteSpace(error.Message)
             ? string.Empty : AppLog.Sanitize(error.Message);
         if (string.Equals(bridge.LastErrorCode, "apple_usbmux_unavailable",
@@ -2845,14 +2862,20 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
 
     private async Task DisableUsbControlCoreAsync(DeviceControlSession control)
     {
-        if (control.Stopping) return;
+        if (control.Stopping)
+        {
+            // Recovery can own bridge cleanup without a StopOperation. A capture
+            // teardown must join that lifetime before releasing the USB session.
+            // Duplicate stops already share StopOperation; never wait on it here.
+            await control.WiredOperation.CancelAsync();
+            return;
+        }
         if (!control.WiredEnabled && (control.WirelessEnabled || control.RequestedWireless))
         {
             await DisableWirelessControlCoreAsync(control);
             return;
         }
-        if (control.Stopping || (!control.WiredEnabled && !control.Starting &&
-            control.WiredBridge is null)) return;
+        if (!control.WiredEnabled && !control.Starting && control.WiredBridge is null) return;
         control.Stopping = true;
         control.ControlStatus.ResolvePrompt(new(ControlPromptAction.Cancel));
         control.WiredEnabled = false;
@@ -2912,22 +2935,29 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
             return;
         var device = Devices.FirstOrDefault(d =>
             DeviceViewModel.UdidEquals(d.Udid, deviceUdid));
-        var boundUsbUdid = GetUsbControlBinding(deviceUdid);
-        if (device is null || string.IsNullOrWhiteSpace(boundUsbUdid))
+        var boundUsbUdid = control.AppleUdid;
+        if (!ValidateControlBinding(control, device, ControlStatusMode.Usb) || string.IsNullOrWhiteSpace(boundUsbUdid))
         {
+            // The failure surface can already offer Retry. Keep both transport
+            // entries busy until the old bridge has finished releasing resources.
+            control.Stopping = true;
             var abandonedBridge = control.WiredBridge;
             control.WiredBridge = null;
             control.WiredEnabled = control.WiredConnected = false;
             control.WiredTarget = null;
             control.Router.Stop();
+            NotifyUsbControlStateChanged();
             try { if (abandonedBridge is not null) await abandonedBridge.DisposeAsync(); }
             catch (Exception error)
             {
                 AddDiagnosticLog(AppLog.Event("usb_control_stop_failed",
                     ("error", AppLog.Error(error))));
             }
-            control.Status = LocalizationService.Get("ReverseControlUsbOff");
-            NotifyUsbControlStateChanged();
+            finally
+            {
+                control.Stopping = false;
+                NotifyUsbControlStateChanged();
+            }
             return;
         }
         var bridgePath = GetUsbDirectControlBridgePath();
@@ -2957,16 +2987,10 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
             cancellationToken.ThrowIfCancellationRequested();
             if (!control.WiredEnabled || control.Stopping ||
                 !DeviceViewModel.UdidEquals(control.WiredTarget, deviceUdid)) return;
-            if (!DeviceViewModel.UdidEquals(GetUsbControlBinding(deviceUdid), boundUsbUdid))
+            if (!ValidateControlBinding(control, device, ControlStatusMode.Usb))
             {
-                var reason = LocalizationService.Get("ReverseControlUsbBindingChanged");
                 control.WiredEnabled = control.WiredConnected = false;
-                control.Failed = true;
                 control.WiredTarget = null;
-                control.Status = LocalizationService.Format(
-                    "ReverseControlUsbFailedFormat", reason);
-                control.ControlStatus.Failed(ControlStatusMode.Usb, device.Name,
-                    LocalizationService.Get("ControlRecoveryFailed"), reason);
                 NotifyUsbControlStateChanged();
                 return;
             }
@@ -2978,13 +3002,10 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
                 AttachUsbBridgeEvents(control, newBridge, device, cancellationToken);
                 await _lockdownHandshakeGate.WaitAsync(cancellationToken);
                 lockdownGateHeld = true;
+                EnsureControlBindingCurrent(control, device, ControlStatusMode.Usb, cancellationToken);
                 await newBridge.StartAsync(UsbTouchTransport.Usb, boundUsbUdid,
                     bridgePath, cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-                if (!DeviceViewModel.UdidEquals(GetUsbControlBinding(deviceUdid),
-                        boundUsbUdid))
-                    throw new InvalidOperationException(
-                        LocalizationService.Get("ReverseControlUsbBindingChanged"));
+                EnsureControlBindingCurrent(control, device, ControlStatusMode.Usb, cancellationToken);
                 control.WiredConnected = true;
                 control.Router.Begin(boundUsbUdid, ReverseControlMode.Usb);
                 control.ControlStatus.Ready(ControlStatusMode.Usb, device.Name);
@@ -3020,7 +3041,7 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
                     ("device", AppLog.Device(device.Udid)),
                     ("error", AppLog.Error(error)),
                     ("attempt", attempts));
-                if (attempts == 3)
+                if (attempts == 3 || !IsControlBindingCurrent(control, device, ControlStatusMode.Usb))
                 {
                     control.WiredEnabled = false;
                     control.Failed = true;
@@ -3030,6 +3051,7 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
                         GetUsbControlFailureMessage(error, newBridge),
                         "ReverseControlRecoveryErrorTitle",
                         $"{newBridge.LastErrorCode}: {AppLog.Error(error)}");
+                    return;
                 }
             }
             finally
@@ -3419,6 +3441,14 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
                         devices.Add(known.AsUsbPresentNoMux());
                 }
             }
+            foreach (var clearedDevice in _usbRestoreRecovery.Observe(
+                         devices.Where(device => !device.IsWireless)
+                             .Select(device => device.Udid)))
+            {
+                AddDiagnosticLog(AppLog.Event("usb_restore_recovery_cleared",
+                    ("device", AppLog.Device(clearedDevice)),
+                    ("reason", "device_reenumerated")));
+            }
             var currentWirelessDeviceIds = devices
                 .Where(device => device.IsWireless)
                 .Select(device => device.Udid)
@@ -3437,12 +3467,8 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
             var currentSelectionUdid = SelectedDevice?.Udid;
             ReconcileDevices(devices, currentSelectionUdid, captureActive,
                 newlyConnectedWirelessUdid);
-            if (!IsMediaCastSelected)
-            {
-                var capture = await Task.Run(GetSelectedCaptureStatus);
-                if (!IsMediaCastSelected) ApplyCaptureStatus(capture);
-            }
-            await PollBackgroundSessionErrorsAsync();
+            await RefreshActiveSessionStatusAsync();
+            await PollBackgroundSessionErrorsAsync(coreGateHeld: true);
 
             var wiredCount = devices.Count(device => !device.IsWireless);
             var wirelessCount = devices.Count - wiredCount;
@@ -3582,10 +3608,22 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
     private async Task RefreshActiveSessionStatusAsync()
     {
         if (_disposed || IsMediaCastSelected) return;
+        // Snapshot on the dispatcher: the worker must not select a different
+        // device, or apply an old result to a restarted session on this device.
+        var device = SelectedDevice;
+        var state = CurrentDeviceSession;
+        var handle = IsSessionPresentable(state) ? state!.Handle : null;
         NativeCaptureStatus status;
         try
         {
-            status = await Task.Run(GetSelectedCaptureStatus).ConfigureAwait(true);
+            status = await Task.Run(() => handle is null
+                ? new NativeCaptureStatus
+                {
+                    StructSize = (uint)Marshal.SizeOf<NativeCaptureStatus>(),
+                    State = CaptureState.Idle,
+                    Message = string.Empty,
+                }
+                : _captureStatusReader(handle)).ConfigureAwait(true);
         }
         catch (Exception error)
         {
@@ -3593,6 +3631,9 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
                 "capture", "active_session_status_refresh_failed", error);
             return;
         }
+        if (_disposed || IsMediaCastSelected || !ReferenceEquals(SelectedDevice, device) ||
+            !ReferenceEquals(CurrentDeviceSession, state) ||
+            !ReferenceEquals(IsSessionPresentable(state) ? state!.Handle : null, handle)) return;
         ApplyCaptureStatus(status);
     }
 
@@ -3672,9 +3713,18 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
         var profile = SelectedWirelessDisplayProfile;
         var backend = _selectedWirelessReceiverBackend;
         var backendOption = WirelessReceiverConfiguration.GetBackendOption(backend);
-        var connectedCount = Devices.Count(device => device.IsWireless);
         var sanitized = WirelessReceiverConfiguration.SanitizeReceiverName(WirelessReceiverName);
         var operation = Stopwatch.StartNew();
+        if (backend == WirelessReceiverBackend.UxPlay && !_wireless.IsBackendAvailable(backend))
+        {
+            IsBusy = true;
+            try
+            {
+                var window = new ComponentDownloadWindow { Owner = Application.Current?.MainWindow };
+                if (window.ShowDialog() != true || _disposed) return;
+            }
+            finally { IsBusy = false; }
+        }
         if (!_wireless.IsBackendAvailable(backend))
         {
             var unavailable = LocalizationService.Format(
@@ -3688,6 +3738,7 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
                 unavailable);
             return;
         }
+        var connectedCount = Devices.Count(device => device.IsWireless);
         AddDiagnosticLog(AppLog.Event("wireless_settings_begin",
             ("receiver_name_length", sanitized.Length),
             ("backend", backend.ToString()), ("profile", profile.Label),
@@ -4100,30 +4151,11 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
         CaptureState.ActivatingUsb or CaptureState.WaitingForDevice or
         CaptureState.Handshaking or CaptureState.Streaming or CaptureState.Stopping;
 
-    private NativeCaptureStatus GetSelectedCaptureStatus()
-    {
-        var handle = CurrentSessionHandle;
-        if (handle == 0) return new NativeCaptureStatus
-        {
-            StructSize = (uint)Marshal.SizeOf<NativeCaptureStatus>(),
-            State = CaptureState.Idle,
-            Message = string.Empty,
-        };
-        // The background thread may destroy the session between reading
-        // CurrentSessionHandle and resolving the safe handle. Treat a stale
-        // raw handle as idle instead of crashing via null-forgiving.
-        var session = FindSessionHandleByRaw(handle);
-        return session is not null
-            ? _core.GetDeviceSessionStatus(session)
-            : new NativeCaptureStatus
-            {
-                StructSize = (uint)Marshal.SizeOf<NativeCaptureStatus>(),
-                State = CaptureState.Idle,
-                Message = string.Empty,
-            };
-    }
+    private bool IsCurrentSession(DeviceCaptureState state, NativeSessionHandle handle) =>
+        !_disposed && !state.IsStopping && !handle.IsClosed && !handle.IsInvalid &&
+        ReferenceEquals(_sessions.Get(state.Udid), state) && ReferenceEquals(state.Handle, handle);
 
-    private async Task PollBackgroundSessionErrorsAsync()
+    private async Task PollBackgroundSessionErrorsAsync(bool coreGateHeld = false)
     {
         foreach (var state in _sessions.Values.Where(value =>
                      value.HasSession && value.Handle?.RawHandle != CurrentSessionHandle).ToArray())
@@ -4133,7 +4165,7 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
             // between the HasSession check in the filter and this use.
             var h = state.Handle;
             if (h is null || h.IsInvalid) continue;
-            try { status = await Task.Run(() => _core.GetDeviceSessionStatus(h)); }
+            try { status = await Task.Run(() => _captureStatusReader(h)); }
             catch (Exception error)
             {
                 DiagnosticLogger.ExceptionOnce(
@@ -4143,6 +4175,7 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
                     ("handle", AppLog.Handle(state.Handle?.RawHandle ?? 0)));
                 continue;
             }
+            if (!IsCurrentSession(state, h)) continue;
             if (status.Width != 0 && status.Height != 0)
                 DeviceVideoSizeChanged?.Invoke(state.Udid, status.Width, status.Height);
             UpdateProtectionState(state, ProtectedContentStatus.Parse(
@@ -4162,21 +4195,53 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
             if (sessionClosedWarning)
             {
                 ShowDeviceSessionClosedWarningThenRelease(
-                    state, status, errorTitle, errorBody);
+                    state, h, status, errorTitle, errorBody);
             }
             else
             {
-                await ReleaseFailedSessionLockedAsync(state, status);
-                CaptureStatusNoticeWindow.ShowError(errorTitle, errorBody);
+                if (coreGateHeld)
+                    await ReleaseFailedSessionLockedAsync(state, h, status);
+                else
+                    await ReleaseFailedSessionAsync(state, h, status);
+                _ = ShowCaptureErrorNoticeAsync(errorTitle, errorBody);
             }
         }
     }
 
-    private async Task ReleaseFailedSessionLockedAsync(DeviceCaptureState state,
-        NativeCaptureStatus status)
+    private async Task ReleaseFailedSessionAsync(DeviceCaptureState state,
+        NativeSessionHandle expectedHandle, NativeCaptureStatus status)
     {
-        var failedHandle = state.Handle;
-        if (failedHandle is null || failedHandle.IsInvalid) return;
+        await _coreGate.WaitAsync();
+        try { await ReleaseFailedSessionLockedAsync(state, expectedHandle, status); }
+        finally { _coreGate.Release(); }
+    }
+
+    private Task SendRoutedTouchAsync(UsbTouchBridgeHost bridge, string action,
+        double x, double y, int pointerId, CancellationToken token,
+        Func<bool>? canSend = null, long? expectedGeneration = null) =>
+        bridge.SendTouchBatchAsync([new TouchPoint(pointerId, action, x, y)],
+            DateTimeOffset.UtcNow.ToUnixTimeNanoseconds(),
+            Interlocked.Increment(ref _usbTouchSequence), token, canSend, expectedGeneration);
+
+    private async Task ShowCaptureErrorNoticeAsync(string errorTitle, string errorBody)
+    {
+        try
+        {
+            await Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                if (!_disposed) CaptureStatusNoticeWindow.ShowError(errorTitle, errorBody);
+            });
+        }
+        catch (Exception error)
+        {
+            DiagnosticLogger.Exception("capture", "capture_error_notice_failed", error);
+        }
+    }
+
+    private async Task ReleaseFailedSessionLockedAsync(DeviceCaptureState state,
+        NativeSessionHandle failedHandle, NativeCaptureStatus status)
+    {
+        if (!IsCurrentSession(state, failedHandle)) return;
         AddDiagnosticLog(AppLog.Event("capture_error_release_begin",
             ("device", AppLog.Device(state.Udid)),
             ("handle", AppLog.Handle(failedHandle?.RawHandle ?? 0)),
@@ -4185,13 +4250,28 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
             ("error_code", status.ErrorCode)));
         try
         {
-            // StopAndDestroyAsync revokes the handle synchronously before its
-            // first yield. This hides every preview immediately and guarantees
-            // native teardown even if recorder or virtual-camera shutdown
-            // reports a separate failure.
-            var teardown = _sessions.StopAndDestroyAsync(state);
-            try { await StopMediaOutputForSessionAsync(state.Udid); }
-            finally { await teardown; }
+            // Hide the failed preview immediately, but let wired control
+            // release its physical USB claim before native configuration restore.
+            state.IsStopping = true;
+            try { NotifyCaptureSessionChanged(); }
+            finally
+            {
+                // UI observers must not be able to retain a failed USB claim.
+                try { await DisableWiredControlForCaptureTeardownAsync(state.Udid); }
+                finally
+                {
+                    var teardown = _sessions.StopAndDestroyAsync(state);
+                    try { await StopMediaOutputForSessionAsync(state.Udid); }
+                    finally { await teardown; }
+                }
+            }
+        }
+        catch (UsbConfigurationRestoreWarningException warning)
+        {
+            _usbRestoreRecovery.MarkRecoveryRequired(state.Udid);
+            AddDiagnosticLog(AppLog.Event("usb_restore_recovery_required",
+                ("device", AppLog.Device(state.Udid)),
+                ("warning_code", warning.ErrorCode)));
         }
         catch (Exception error)
         {
@@ -4208,11 +4288,32 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
     }
 
     private void ShowDeviceSessionClosedWarningThenRelease(
-        DeviceCaptureState state, NativeCaptureStatus status,
+        DeviceCaptureState state, NativeSessionHandle expectedHandle, NativeCaptureStatus status,
         string errorTitle, string errorBody)
     {
-        CaptureStatusNoticeWindow.ShowStoppedThen(errorTitle, errorBody,
-            () => ReleaseFailedSessionLockedAsync(state, status));
+        _ = ShowDeviceSessionClosedWarningAsync(state, expectedHandle, status, errorTitle, errorBody);
+    }
+
+    private async Task ShowDeviceSessionClosedWarningAsync(
+        DeviceCaptureState state, NativeSessionHandle expectedHandle, NativeCaptureStatus status,
+        string errorTitle, string errorBody)
+    {
+        try
+        {
+            // Never put ShowDialog on a caller's core-gate stack: its cleanup
+            // callback needs that same gate while the notice is still visible.
+            await Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                if (!IsCurrentSession(state, expectedHandle)) return;
+                CaptureStatusNoticeWindow.ShowStoppedThen(errorTitle, errorBody,
+                    () => ReleaseFailedSessionAsync(state, expectedHandle, status));
+            });
+        }
+        catch (Exception error)
+        {
+            DiagnosticLogger.Exception("capture", "capture_stopped_notice_failed", error);
+            await ReleaseFailedSessionAsync(state, expectedHandle, status);
+        }
     }
 
     private void ResetPreviewState()
@@ -4308,6 +4409,15 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
             // Keep readiness checks, teardown and native session creation on
             // one per-process path so independent windows cannot race the
             // selected device into a duplicate wired start.
+            if (TryGetUsbRestoreRecoveryMessage(device, out var recoveryMessage))
+            {
+                CaptureStatus = recoveryMessage;
+                AddUiLog(recoveryMessage);
+                AddDiagnosticLog(AppLog.Event("capture_start_blocked",
+                    ("device", AppLog.Device(device.Udid)),
+                    ("reason", "usb_restore_reenumeration_required")));
+                return;
+            }
             var preflight = await EnsureSourceReadyAsync(device);
             AddDiagnosticLog(AppLog.Event("capture_start_preflight",
                 ("device", AppLog.Device(device.Udid)),
@@ -4700,6 +4810,10 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
             catch (UsbConfigurationRestoreWarningException warning)
             {
                 restoreWarning = warning;
+                _usbRestoreRecovery.MarkRecoveryRequired(stoppedUdid);
+                AddDiagnosticLog(AppLog.Event("usb_restore_recovery_required",
+                    ("device", AppLog.Device(stoppedUdid)),
+                    ("warning_code", warning.ErrorCode)));
             }
             if (DeviceViewModel.IsWirelessUdid(stoppedUdid))
             {
@@ -5174,6 +5288,13 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
                     ("elapsed_ms", operation.ElapsedMilliseconds)));
                 return (true, existing.Handle?.RawHandle ?? 0, false, string.Empty);
             }
+            if (TryGetUsbRestoreRecoveryMessage(device, out var recoveryMessage))
+            {
+                AddDiagnosticLog(AppLog.Event("independent_session_blocked",
+                    ("device", AppLog.Device(device.Udid)),
+                    ("reason", "usb_restore_reenumeration_required")));
+                return (false, 0, false, recoveryMessage);
+            }
             var preflight = await EnsureSourceReadyAsync(device);
             if (!preflight.Success)
             {
@@ -5284,6 +5405,7 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
         }
         catch (UsbConfigurationRestoreWarningException warning)
         {
+            _usbRestoreRecovery.MarkRecoveryRequired(udid);
             AddDiagnosticLog(AppLog.Event("independent_session_stop_complete",
                 ("device", AppLog.Device(udid)),
                 ("elapsed_ms", operation.ElapsedMilliseconds), ("success", true),
@@ -5369,7 +5491,7 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
         if (status.State is not CaptureState.Idle || SelectedDevice is null)
             CaptureStatus = GetCaptureStatusText(status, IsWirelessSelected);
         if (status.State == CaptureState.Error &&
-            CurrentDeviceSession is { ErrorShown: false } failedSession)
+            CurrentDeviceSession is { ErrorShown: false, Handle: { } failedHandle } failedSession)
         {
             failedSession.ErrorShown = true;
             var sessionClosedWarning =
@@ -5383,12 +5505,12 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
             if (sessionClosedWarning)
             {
                 ShowDeviceSessionClosedWarningThenRelease(
-                    failedSession, status, errorTitle, errorBody);
+                    failedSession, failedHandle, status, errorTitle, errorBody);
             }
             else
             {
                 _ = ReleaseSelectedFailedSessionAsync(
-                    failedSession, status, errorTitle, errorBody);
+                    failedSession, failedHandle, status, errorTitle, errorBody);
             }
         }
         Resolution = audioOnlyAirPlay
@@ -5507,21 +5629,15 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
     }
 
     private async Task ReleaseSelectedFailedSessionAsync(
-        DeviceCaptureState state, NativeCaptureStatus status,
+        DeviceCaptureState state, NativeSessionHandle expectedHandle, NativeCaptureStatus status,
         string errorTitle, string errorBody)
     {
-        await _coreGate.WaitAsync();
-        try
-        {
-            if (state.HasSession)
-                await ReleaseFailedSessionLockedAsync(state, status);
-        }
-        finally { _coreGate.Release(); }
+        await ReleaseFailedSessionAsync(state, expectedHandle, status);
 
         // A modal prompt must never own the lifetime of a failed USB session.
         // Stop and destroy first so an unattended error dialog cannot retain
         // device handles or delay Windows shutdown.
-        CaptureStatusNoticeWindow.ShowError(errorTitle, errorBody);
+        await ShowCaptureErrorNoticeAsync(errorTitle, errorBody);
     }
 
 
@@ -5744,6 +5860,16 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
         return (false, errorCode, failureKind, failure);
     }
 
+    private bool TryGetUsbRestoreRecoveryMessage(DeviceViewModel device,
+        out string message)
+    {
+        message = string.Empty;
+        if (device.IsWireless || !_usbRestoreRecovery.IsBlocked(device.Udid))
+            return false;
+        message = LocalizationService.Get("CaptureUsbRestoreReplugRequired");
+        return true;
+    }
+
     private bool OpenDriverManager(bool automatic = false)
     {
         var result = _driverManager.Launch();
@@ -5920,6 +6046,8 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
         {
             DiagnosticLogger.Exception("capture", "failed_session_rollback_stop",
                 error, ("handle", AppLog.Handle(created.Handle?.RawHandle ?? 0)));
+            if (error is UsbConfigurationRestoreWarningException)
+                _usbRestoreRecovery.MarkRecoveryRequired(device.Udid);
         }
         _core.DestroyDeviceSession(created.Handle!);
         return new(false, null, (int)NativeResult.CaptureBackendUnavailable,
@@ -6037,6 +6165,7 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
 
     private void OnLanguageChanged(object? sender, EventArgs e)
     {
+        OnPropertyChanged(nameof(KeyboardMappingStatus));
         _selectedLanguage = LocalizationService.SelectedLanguage;
         OnPropertyChanged(nameof(SelectedLanguage));
         foreach (var preset in ResolutionPresets) preset.NotifyLanguageChanged();
@@ -6967,6 +7096,8 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
         }
         catch (Exception error)
         {
+            if (error is UsbConfigurationRestoreWarningException)
+                _usbRestoreRecovery.MarkRecoveryRequired(state.Udid);
             SetRawSettingsStatus(error.Message);
             AddDiagnosticLog(AppLog.Event("video_pipeline_restart_failed",
                 ("reason", reason), ("device", AppLog.Device(state.Udid)),
@@ -7021,6 +7152,7 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
             window.CloseForShutdown();
         _imageSettingsWindows.Clear();
         _disposed = true;
+        _clipboardSyncState?.Stop();
         _shutdownCancellation.Cancel();
         LocalizationService.LanguageChanged -= OnLanguageChanged;
         await AwaitShutdownStageAsync("disable_usb_control",

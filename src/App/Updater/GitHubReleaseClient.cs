@@ -19,6 +19,7 @@ internal enum UpdateDownloadPhase
     Download,
     ConnectivityTest,
     ThroughputTest,
+    Verification,
 }
 
 internal sealed record UpdateDownloadProgress(
@@ -132,6 +133,7 @@ internal sealed class GitHubReleaseClient : IDisposable
     private static readonly TimeSpan CandidateThroughputWindow =
         TimeSpan.FromSeconds(12);
     private static readonly TimeSpan DownloadStallTimeout = TimeSpan.FromSeconds(30);
+    private const int MaximumRankedRoutes = 4;
     private static readonly (string Name, Uri Uri)[] ReleaseEndpoints =
     [
         ("github-api", new Uri(
@@ -346,7 +348,7 @@ internal sealed class GitHubReleaseClient : IDisposable
             response.EnsureSuccessStatusCode();
             var notes = await ReadReleaseNotesAsync(response.Content, timeout.Token);
             if (!string.IsNullOrWhiteSpace(notes))
-                return release with { Body = notes.Trim() };
+                release = release with { Body = notes.Trim() };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -359,7 +361,40 @@ internal sealed class GitHubReleaseClient : IDisposable
             DiagnosticLogger.Exception("updater", "release_notes_failed", error,
                 ("release", release.TagName));
         }
+        if (LocalizationService.EffectiveCulture.Name == LocalizationService.TraditionalChineseTaiwan)
+            release = await EnrichTaiwanReleaseNotesAsync(release, cancellationToken);
         return release;
+    }
+
+    internal async Task<ReleaseInfo> EnrichTaiwanReleaseNotesAsync(ReleaseInfo release,
+        CancellationToken cancellationToken)
+    {
+        if (release.TaiwanNotesChecked) return release;
+        release = release with { TaiwanNotesChecked = true };
+        var uri = new Uri($"https://raw.githubusercontent.com/RayrenSX/iPhoneMirror/{release.TagName}/CHANGELOG.zh-TW.md");
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(5));
+            using var response = await _httpClient.GetAsync(uri,
+                HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+            var finalUri = response.RequestMessage?.RequestUri;
+            if (finalUri is null || finalUri.Scheme != Uri.UriSchemeHttps ||
+                !finalUri.Host.Equals(uri.Host, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException(LocalizationService.Get("UpdateUntrustedNotesRedirect"));
+            response.EnsureSuccessStatusCode();
+            var changelog = await ReadReleaseNotesAsync(response.Content, timeout.Token);
+            return release with { TaiwanBody = LocalizedReleaseNotes.FindSection(changelog, release.TagName) };
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception error) when (error is HttpRequestException or OperationCanceledException or InvalidDataException)
+        {
+            // Older tags predate Taiwan support; the embedded reviewed history
+            // supplies their translation without another language dictionary.
+            DiagnosticLogger.Exception("updater", "taiwan_release_notes_unavailable", error,
+                ("release", release.TagName));
+            return release;
+        }
     }
 
     private static async Task<string> ReadReleaseNotesAsync(HttpContent content,
@@ -386,11 +421,46 @@ internal sealed class GitHubReleaseClient : IDisposable
             timeout.Token);
     }
 
+    // A missing official component cannot be recovered by probing 115 mirrors.
+    // Network failures still allow mirror fallback; only an authoritative 404
+    // terminates the install. Do this after the component's verified-cache check.
+    internal async Task CheckComponentAvailabilityAsync(ReleaseAsset asset, CancellationToken cancellationToken)
+    {
+        if (!ReleaseParser.IsTrustedGitHubAssetUri(asset.DownloadUri))
+            throw new InvalidDataException(LocalizationService.Get("UpdateUntrustedAssetUrl"));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(CandidatePingWindow);
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, asset.DownloadUri);
+            request.Headers.Range = new RangeHeaderValue(0, 0);
+            using var response = await _httpClient.SendAsync(request,
+                HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+            EnsureTrustedDownloadResponse(asset.DownloadUri, response);
+            LogDownloadResponse(asset.DownloadUri, response, "component_availability");
+            if (response.StatusCode == HttpStatusCode.NotFound)
+                throw new HttpRequestException("UxPlay release asset has not been published.", null, response.StatusCode);
+        }
+        catch (Exception error) when (!cancellationToken.IsCancellationRequested &&
+            (error is OperationCanceledException || error is HttpRequestException { StatusCode: not HttpStatusCode.NotFound }))
+        {
+            DiagnosticLogger.Exception("components", "uxplay_origin_check_unavailable", error,
+                ("request_url", DiagnosticLogger.DownloadUrl(asset.DownloadUri)));
+        }
+    }
+
+    private static void LogDownloadResponse(Uri requestUri, HttpResponseMessage response, string phase) =>
+        DiagnosticLogger.Info("updater", "download_http_response", ("phase", phase),
+            ("http_status", (int)response.StatusCode),
+            ("request_url", DiagnosticLogger.DownloadUrl(requestUri)),
+            ("final_url", DiagnosticLogger.DownloadUrl(response.RequestMessage?.RequestUri)));
+
     internal async Task<DownloadedUpdate> DownloadAsync(ReleaseInfo release,
         IProgress<UpdateDownloadProgress>? progress = null,
         CancellationToken cancellationToken = default,
         bool allowMirrorFallback = true,
-        bool? preferInstaller = null)
+        bool? preferInstaller = null,
+        bool stopOnOfficialNotFound = false)
     {
         var useInstaller = preferInstaller ?? DeploymentLayout.UsesSharedRuntime();
         var asset = release.SelectAsset(useInstaller) ?? throw new InvalidOperationException(
@@ -416,8 +486,17 @@ internal sealed class GitHubReleaseClient : IDisposable
         Exception? lastError = null;
         var downloadCandidates = await RankDownloadCandidatesAsync(asset,
             allowMirrorFallback, progress, cancellationToken);
-        foreach (var downloadUri in downloadCandidates)
+        // Try at most three measured mirrors plus the official route. A second
+        // pass is only for transient failures; 404s and bad hashes are not retried.
+        var routes = downloadCandidates.Take(MaximumRankedRoutes - 1).ToList();
+        if (!routes.Contains(asset.DownloadUri)) routes.Add(asset.DownloadUri);
+        var attempts = new Queue<(Uri Uri, bool Retried)>(routes.Select(uri => (uri, false)));
+        var attemptNumber = 0;
+        while (attempts.TryDequeue(out var attempt))
         {
+            var downloadUri = attempt.Uri;
+            ++attemptNumber;
+            if (attempt.Retried) await Task.Delay(500, cancellationToken);
             TryDelete(partial);
             progress?.Report(new UpdateDownloadProgress(0,
                 asset.Size > 0 ? asset.Size : null, 0));
@@ -425,20 +504,24 @@ internal sealed class GitHubReleaseClient : IDisposable
             {
                 DiagnosticLogger.Info("updater", "download_begin",
                     ("release", release.TagName), ("asset", asset.Name),
-                    ("bytes", asset.Size), ("endpoint", downloadUri.Host));
+                    ("bytes", asset.Size), ("endpoint", downloadUri.Host),
+                    ("request_url", DiagnosticLogger.DownloadUrl(downloadUri)),
+                    ("attempt", attemptNumber), ("retry_count", attempt.Retried ? 1 : 0));
                 using var stallTimeout =
                     CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 stallTimeout.CancelAfter(DownloadStallTimeout);
                 var segmentCount = await DownloadFileAsync(asset, downloadUri, partial, progress,
                     stallTimeout, stallTimeout.Token);
                 stallTimeout.CancelAfter(Timeout.InfiniteTimeSpan);
+                progress?.Report(new UpdateDownloadProgress(asset.Size, asset.Size, 0,
+                    UpdateDownloadPhase.Verification));
                 var verifiedSha256 = await VerifyAsync(release, asset, partial, allowMirrorFallback,
                     cancellationToken);
                 File.Move(partial, destination, overwrite: true);
                 DiagnosticLogger.Info("updater", "download_complete",
                     ("release", release.TagName), ("asset", asset.Name),
                     ("sha256_verified", true), ("endpoint", downloadUri.Host),
-                    ("segments", segmentCount));
+                    ("segments", segmentCount), ("downloaded_bytes", new FileInfo(destination).Length));
                 return new DownloadedUpdate(release, asset, destination,
                     HashVerified: true, VerifiedSha256: verifiedSha256);
             }
@@ -449,21 +532,40 @@ internal sealed class GitHubReleaseClient : IDisposable
             }
             catch (Exception error) when (error is HttpRequestException or
                                            OperationCanceledException or
+                                           HttpIOException or
                                            EndOfStreamException or
                                            InvalidDataException)
             {
                 lastError = error;
                 DiagnosticLogger.Exception("updater", "download_endpoint_failed",
                     error, ("release", release.TagName), ("asset", asset.Name),
-                    ("endpoint", downloadUri.Host));
+                    ("endpoint", downloadUri.Host), ("attempt", attemptNumber),
+                    ("retry_count", attempt.Retried ? 1 : 0),
+                    ("http_status", (error as HttpRequestException)?.StatusCode),
+                    ("request_url", DiagnosticLogger.DownloadUrl(downloadUri)));
+                if (stopOnOfficialNotFound && downloadUri == asset.DownloadUri &&
+                    error is HttpRequestException { StatusCode: HttpStatusCode.NotFound })
+                    throw;
+                if (!attempt.Retried && IsTransientDownloadFailure(error))
+                    attempts.Enqueue((downloadUri, true));
             }
         }
 
         TryDelete(partial);
         if (lastError is InvalidDataException invalidData) throw invalidData;
         throw new HttpRequestException(
-            LocalizationService.Get("UpdateDownloadEndpointsUnavailable"), lastError);
+            LocalizationService.Get("UpdateDownloadEndpointsUnavailable"), lastError,
+            (lastError as HttpRequestException)?.StatusCode);
     }
+
+    private static bool IsTransientDownloadFailure(Exception error) => error switch
+    {
+        OperationCanceledException or EndOfStreamException or HttpIOException => true,
+        HttpRequestException { StatusCode: null } => true,
+        HttpRequestException { StatusCode: var status } =>
+            status is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests || (int?)status >= 500,
+        _ => false,
+    };
 
     internal static IReadOnlyList<Uri> BuildDownloadCandidates(
         ReleaseAsset asset, bool allowMirrorFallback)
@@ -583,6 +685,7 @@ internal sealed class GitHubReleaseClient : IDisposable
             using var response = await _httpClient.SendAsync(request,
                 HttpCompletionOption.ResponseHeadersRead, cancellationToken);
             EnsureTrustedDownloadResponse(uri, response);
+            LogDownloadResponse(uri, response, "throughput_probe");
             response.EnsureSuccessStatusCode();
 
             var expectedSampleBytes = checked((int)(probeEnd + 1));
@@ -679,7 +782,8 @@ internal sealed class GitHubReleaseClient : IDisposable
                 MaximumUpdateBytes,
                 asset.Size > 0 ? asset.Size : null),
             finalUri => IsTrustedDownloadFinalUri(downloadUri, finalUri),
-            downloadProgress, cancellationToken);
+            downloadProgress, cancellationToken,
+            (requestUri, response) => LogDownloadResponse(requestUri, response, "download"));
         return result.SegmentCount;
     }
 
