@@ -108,6 +108,7 @@ $UsbControlSource = Join-Path $Root 'tools\usb_touch_bridge.py'
 $UsbTouchBridgeOutput = Join-Path $Root 'dist\iUsbBridge.exe'
 $UsbTouchBridgeRuntimeManifest = Join-Path $Root 'dist\iUsbBridge.runtime.json'
 $UsbTouchBridgeRuntimeTools = Join-Path $Root 'scripts\UsbTouchBridgeRuntime.ps1'
+$PrepareLibUsb0Runtime = Join-Path $Root 'scripts\prepare_libusb0_runtime.ps1'
 $UsbControlEnvironment = Join-Path $Root 'work\usb-touch-bridge-python'
 $UsbControlPython = Join-Path $UsbControlEnvironment 'Scripts\python.exe'
 
@@ -126,12 +127,19 @@ function Build-UsbTouchBridge {
         }
     }
 
+    # The frozen bridge can only load libusb from its own runtime directory, so
+    # the same verified libusb-win32 DLL the app ships is bundled into _internal.
+    $libUsb0Stage = Join-Path $Root 'work\usb-bridge-libusb0'
+    & $PrepareLibUsb0Runtime -DestinationDirectory $libUsb0Stage | Out-Host
+    $libUsb0Payload = Join-Path $libUsb0Stage 'libusb0.dll'
+
     $stageRoot = Join-Path $Root 'work\usb-bridge-build'
     $stage = New-UsbBridgeBuildSource -RecipeRoot $UsbControlRoot `
         -SourceRoot (Join-Path $Root 'tools') -WorkRoot $stageRoot
     try {
         & (Join-Path $stage 'build.ps1') -BridgeOnly `
-            -BridgeOutputPath $UsbTouchBridgeOutput -EnvironmentPath $UsbControlEnvironment
+            -BridgeOutputPath $UsbTouchBridgeOutput -EnvironmentPath $UsbControlEnvironment `
+            -LibUsb0Path $libUsb0Payload
         if ($LASTEXITCODE -ne 0) {
             throw "USB touch bridge build failed: $LASTEXITCODE"
         }
@@ -142,6 +150,9 @@ function Build-UsbTouchBridge {
     if (-not (Test-Path -LiteralPath $UsbTouchBridgeOutput -PathType Leaf) -or
         -not (Test-Path -LiteralPath $UsbTouchBridgeRuntimeManifest -PathType Leaf)) {
         throw 'USB touch bridge output is incomplete.'
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $Root 'dist\_internal\libusb0.dll') -PathType Leaf)) {
+        throw 'USB touch bridge runtime does not contain libusb0.dll; reverse control would have no USB backend.'
     }
     if (-not (Test-Path -LiteralPath $UsbControlPython -PathType Leaf)) {
         throw "USB touch bridge Python environment is missing: $UsbControlPython"
@@ -288,7 +299,6 @@ $PrepareMediaOutputRuntime = Join-Path $Root 'scripts\prepare_ffmpeg.ps1'
 $PrepareVcRuntime = Join-Path $Root 'scripts\prepare_vc_runtime.ps1'
 $PrepareUxPlayRuntime = Join-Path $Root 'scripts\prepare_uxplay.ps1'
 $UxPlayRuntimeManifestPath = Join-Path $Root 'scripts\uxplay-runtime-manifest.psd1'
-$PrepareLibUsb0Runtime = Join-Path $Root 'scripts\prepare_libusb0_runtime.ps1'
 $AppleSupportPackageTools = Join-Path $Root 'scripts\AppleSupportPackage.ps1'
 $MediaOutputManifestPath = Join-Path $Root 'scripts\ffmpeg-runtime-manifest.psd1'
 if ($FfmpegRuntimeManifestPath) { $MediaOutputManifestPath = [IO.Path]::GetFullPath($FfmpegRuntimeManifestPath) }

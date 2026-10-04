@@ -26,6 +26,11 @@ All notable changes to iPhoneMirror are documented here. The project follows
 
 ### Fixed
 
+- Bundle `libusb0.dll` inside the USB reverse-control bridge runtime. The
+  frozen bridge only loads libusb from its own runtime directory, so wired
+  reverse control failed at "Preparing device support files" with "no libusb
+  backend available" even though the DLL shipped next to the application.
+  The build now fails if the bridge cannot load its USB backend.
 - The USB reverse-control bridge now reports English diagnostics. Its
   status and error messages, log lines and `--help` text were Chinese-only,
   which also crashed `--help` on non-UTF-8 consoles; the app keeps

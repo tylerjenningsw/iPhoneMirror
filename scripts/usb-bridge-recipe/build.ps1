@@ -4,7 +4,8 @@ param(
     [string]$Configuration = "Release",
     [switch]$BridgeOnly,
     [string]$BridgeOutputPath,
-    [string]$EnvironmentPath
+    [string]$EnvironmentPath,
+    [string]$LibUsb0Path
 )
 
 $ErrorActionPreference = "Stop"
@@ -95,6 +96,17 @@ try {
     if (-not (Test-Path -LiteralPath $Bridge -PathType Leaf) -or
         -not (Test-Path -LiteralPath (Join-Path $BridgeDirectory '_internal') -PathType Container)) {
         throw "PyInstaller did not produce the USB touch bridge: $Bridge"
+    }
+    # pyusb's PyInstaller runtime hook loads libusb only from the bundle's own
+    # runtime directory (sys._MEIPASS), never from PATH. Without libusb0.dll in
+    # _internal the frozen bridge has no USB backend at all, even though the
+    # main application publishes the same DLL next to iPhoneMirror.exe.
+    if (-not [string]::IsNullOrWhiteSpace($LibUsb0Path)) {
+        if (-not (Test-Path -LiteralPath $LibUsb0Path -PathType Leaf)) {
+            throw "libusb0 runtime for the USB touch bridge is missing: $LibUsb0Path"
+        }
+        Copy-Item -LiteralPath $LibUsb0Path `
+            -Destination (Join-Path $BridgeDirectory '_internal\libusb0.dll') -Force
     }
     Write-BridgeRuntimeManifest $BridgeDirectory
     & $Bridge --check-runtime
