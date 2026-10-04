@@ -398,6 +398,7 @@
     <system:String x:Key="ShortcutSettingsFullScreen">切换全屏</system:String>
     <system:String x:Key="ShortcutSettingsQuickNote">新建快捷笔记</system:String>
     <system:String x:Key="ShortcutSettingsSiri">唤醒 Siri</system:String>
+    <system:String x:Key="ShortcutSettingsOnScreenKeyboard">显示或隐藏屏幕键盘</system:String>
     <system:String x:Key="ShortcutSettingsUnbound">未绑定</system:String>
     <system:String x:Key="ShortcutSettingsDuplicate">每个动作必须使用不同的快捷键。</system:String>
     <system:String x:Key="ShortcutSettingsDuplicateBindingFormat">{0} 已用于“{1}”，请选择其他快捷键或先解除原绑定。</system:String>

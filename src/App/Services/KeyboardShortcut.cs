@@ -74,6 +74,7 @@ internal readonly record struct KeyboardShortcut(uint Modifiers, uint VirtualKey
             BluetoothShortcutAction.VolumeUp => FromStoredSettings(settings.BluetoothVolumeUpShortcutModifiers, settings.BluetoothVolumeUpShortcutVirtualKey, Unbound),
             BluetoothShortcutAction.VolumeDown => FromStoredSettings(settings.BluetoothVolumeDownShortcutModifiers, settings.BluetoothVolumeDownShortcutVirtualKey, Unbound),
             BluetoothShortcutAction.LockScreen => FromStoredSettings(settings.BluetoothLockScreenShortcutModifiers, settings.BluetoothLockScreenShortcutVirtualKey, Unbound),
+            BluetoothShortcutAction.OnScreenKeyboard => FromStoredSettings(settings.BluetoothOnScreenKeyboardShortcutModifiers, settings.BluetoothOnScreenKeyboardShortcutVirtualKey, Unbound),
             _ => Default,
         };
 
@@ -230,4 +231,5 @@ internal enum BluetoothShortcutAction
     VolumeUp,
     VolumeDown,
     LockScreen,
+    OnScreenKeyboard,
 }
