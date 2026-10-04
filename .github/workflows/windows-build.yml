@@ -67,3 +67,14 @@ jobs:
       - name: Build Release, run tests, and publish Windows x64 output
         shell: pwsh
         run: ./build.ps1 -Configuration Release
+
+      # Lets anyone try a branch build without a local native toolchain: download
+      # the artifact from the run, extract it and start iPhoneMirror.exe.
+      - name: Upload portable app build
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iPhoneMirror-win-x64-${{ github.sha }}
+          path: outputs/iPhoneMirror
+          if-no-files-found: error
+          retention-days: 14
